@@ -30,6 +30,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,10 +45,15 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.auth.SessionStore
+import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.data.remote.MessengerProfile
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
@@ -72,6 +78,15 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
     val me = SampleData.me
     var notificationsOn by remember { mutableStateOf(true) }
     val headerHeight = d.scaled(248)
+
+    // The real profile, which only /v1/me can supply. Fetched once per launch and
+    // cached, so switching tabs does not re-request it.
+    val context = LocalContext.current
+    val session = remember { SessionStore(context) }
+    val profile = MeRepository.profile
+    LaunchedEffect(Unit) {
+        if (!MeRepository.loaded) MeRepository.load(session.token)
+    }
 
     Column(
         Modifier
@@ -135,7 +150,7 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                 }
 
                 Spacer(Modifier.height(d.gapLg))
-                IdentityCard(me)
+                IdentityCard(me, profile)
             }
         }
 
@@ -185,7 +200,19 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     icon = IqIcons.ShieldOutline,
                     iconTint = Color(0xFFE3F5E9),
                     title = "Privacy",
-                    subtitle = "Security and visibility"
+                    // Read-only: /v1/me serves these but has no write verb, so the
+                    // row reports them rather than pretending to change them.
+                    // One line, sharing the row with the "Protected" chip, so the
+                    // common case of both settings matching is collapsed rather than
+                    // spelled out and then truncated.
+                    subtitle = profile?.let {
+                        if (it.whoCanMessage == it.whoCanCall) {
+                            "Messages & calls: ${readable(it.whoCanMessage)}"
+                        } else {
+                            "Msg: ${readable(it.whoCanMessage)} · " +
+                                "Calls: ${readable(it.whoCanCall)}"
+                        }
+                    } ?: "Security and visibility"
                 ) {
                     Text(
                         "Protected",
@@ -265,6 +292,28 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
     }
 }
 
+/**
+ * Counts in the style the mockup uses: `9`, `1.2K`, `12.6K`, `3.4M`.
+ *
+ * Done with integer maths rather than `String.format`, which would render the
+ * decimal separator in the device's locale and turn `12.6K` into `12,6K`.
+ */
+private fun compactCount(value: Int): String = when {
+    value < 1_000 -> value.toString()
+    value < 1_000_000 -> abbreviate(value, 1_000, "K")
+    else -> abbreviate(value, 1_000_000, "M")
+}
+
+private fun abbreviate(value: Int, unit: Int, suffix: String): String {
+    val whole = value / unit
+    val tenth = (value % unit) * 10 / unit
+    return if (tenth == 0) "$whole$suffix" else "$whole.$tenth$suffix"
+}
+
+/** Turns an API enum such as `my_contacts` into something readable. */
+private fun readable(value: String): String =
+    value.replace('_', ' ').trim().ifEmpty { "—" }
+
 /** Page container: gutters, capped width on tablets. */
 @Composable
 private fun PageWidth(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
@@ -281,9 +330,34 @@ private fun PageWidth(content: @Composable androidx.compose.foundation.layout.Co
 }
 
 @Composable
-private fun IdentityCard(me: com.iqsocial.iq_message.data.Person) {
+private fun IdentityCard(sample: Person, profile: MessengerProfile?) {
     val d = IqTheme.dimens
     val editSize = d.iconButtonLg
+
+    // Real profile where there is one, mockup data until then. Building a Person
+    // from it keeps the avatar's generated gradient and initials tied to the real
+    // identity rather than to "Rafi Hasan".
+    val me = remember(profile, sample) {
+        profile?.let {
+            Person(
+                id = it.uid.ifBlank { sample.id },
+                name = it.fullname.ifBlank { sample.name },
+                handle = it.phoneNumber.ifBlank { sample.handle },
+                online = it.isOnline
+            )
+        } ?: sample
+    }
+    // A real account with an empty bio must not inherit the mockup's line — that
+    // would show the user a bio they never wrote. The sample copy belongs to sample
+    // mode only; a loaded profile with no bio invites one instead.
+    val bio = when {
+        profile == null -> "Creating smarter connections."
+        profile.bio.isNotBlank() -> profile.bio
+        else -> null
+    }
+    // The tick was hardcoded. With a real profile it has to follow `verified`;
+    // without one the mockup's look stands, since the whole card is sample data.
+    val verified = profile?.isVerified ?: true
     PageWidth {
         Column(
             Modifier
@@ -305,7 +379,8 @@ private fun IdentityCard(me: com.iqsocial.iq_message.data.Person) {
                         ringWidth = d.scaled(4),
                         ringColor = Color.White,
                         ringGap = 0.dp,
-                        showPresence = true
+                        // Respects the user's own "show active status" setting.
+                        showPresence = profile?.showActiveStatus ?: true
                     )
                     Spacer(Modifier.width(d.gapMd))
                     Column(
@@ -324,11 +399,13 @@ private fun IdentityCard(me: com.iqsocial.iq_message.data.Person) {
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            Spacer(Modifier.width(d.gapXs))
-                            Icon(
-                                IqIcons.Verified, "Verified",
-                                Modifier.size(d.iconSm), tint = Crimson
-                            )
+                            if (verified) {
+                                Spacer(Modifier.width(d.gapXs))
+                                Icon(
+                                    IqIcons.Verified, "Verified",
+                                    Modifier.size(d.iconSm), tint = Crimson
+                                )
+                            }
                         }
                         Text(
                             me.handle,
@@ -339,9 +416,9 @@ private fun IdentityCard(me: com.iqsocial.iq_message.data.Person) {
                         )
                         Spacer(Modifier.height(d.gapXs))
                         Text(
-                            "Creating smarter connections.",
+                            bio ?: "Add a bio",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = Ink,
+                            color = if (bio != null) Ink else InkFaint,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -371,11 +448,22 @@ private fun IdentityCard(me: com.iqsocial.iq_message.data.Person) {
                     .padding(vertical = d.gapLg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatCell("128", "Posts", Modifier.weight(1f))
+                // Real counts once /v1/me has answered; the mockup's numbers until
+                // then, so the card never shows a row of zeroes while loading.
+                StatCell(
+                    profile?.let { compactCount(it.totalPost) } ?: "128",
+                    "Posts", Modifier.weight(1f)
+                )
                 StatDivider()
-                StatCell("12.6K", "Followers", Modifier.weight(1f))
+                StatCell(
+                    profile?.let { compactCount(it.followers) } ?: "12.6K",
+                    "Followers", Modifier.weight(1f)
+                )
                 StatDivider()
-                StatCell("584", "Following", Modifier.weight(1f))
+                StatCell(
+                    profile?.let { compactCount(it.following) } ?: "584",
+                    "Following", Modifier.weight(1f)
+                )
             }
         }
     }

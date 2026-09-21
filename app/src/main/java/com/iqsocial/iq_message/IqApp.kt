@@ -22,6 +22,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.contacts.ContactsRepository
+import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.ui.components.ContactsAccessGate
 import com.iqsocial.iq_message.ui.components.HomeTab
 import com.iqsocial.iq_message.ui.components.IqBottomBar
 import com.iqsocial.iq_message.ui.screens.AudioCallScreen
@@ -29,9 +32,11 @@ import com.iqsocial.iq_message.ui.screens.CallsScreen
 import com.iqsocial.iq_message.ui.screens.ChatScreen
 import com.iqsocial.iq_message.ui.screens.ChatsScreen
 import com.iqsocial.iq_message.ui.screens.IncomingCallScreen
-import com.iqsocial.iq_message.ui.screens.OtpScreen
+import com.iqsocial.iq_message.ui.screens.ForgotPasswordScreen
+import com.iqsocial.iq_message.ui.screens.LoginScreen
+import com.iqsocial.iq_message.ui.screens.SignupScreen
+import com.iqsocial.iq_message.ui.screens.rememberAuthRepository
 import com.iqsocial.iq_message.ui.screens.PeopleScreen
-import com.iqsocial.iq_message.ui.screens.PhoneScreen
 import com.iqsocial.iq_message.ui.screens.ProfileScreen
 import com.iqsocial.iq_message.ui.screens.VideoCallScreen
 
@@ -42,8 +47,9 @@ import com.iqsocial.iq_message.ui.screens.VideoCallScreen
  * is small and fixed, and this keeps the module free of extra dependencies.
  */
 sealed interface Route {
-    data object Phone : Route
-    data object Otp : Route
+    data object Login : Route
+    data object Signup : Route
+    data object ForgotPassword : Route
     data object Home : Route
     data class Chat(val conversationId: String) : Route
     data class IncomingCall(val personId: String) : Route
@@ -73,7 +79,11 @@ private class Navigator(initial: Route) {
 
 @Composable
 fun IqApp() {
-    val nav = remember { Navigator(Route.Phone) }
+    // A stored token skips straight past the auth screens on relaunch.
+    val auth = rememberAuthRepository()
+    val nav = remember {
+        Navigator(if (auth.isSignedIn()) Route.Home else Route.Login)
+    }
     var tab by rememberSaveable { mutableStateOf(HomeTab.Chats) }
 
     BackHandler(enabled = nav.canGoBack) { nav.pop() }
@@ -90,25 +100,43 @@ fun IqApp() {
         label = "route"
     ) { route ->
         when (route) {
-            Route.Phone -> PhoneScreen(
-                onBack = { },
-                onContinue = { nav.push(Route.Otp) }
+            Route.Login -> LoginScreen(
+                onLoggedIn = { nav.replaceAll(Route.Home) },
+                onSignUp = { nav.push(Route.Signup) },
+                onForgotPassword = { nav.push(Route.ForgotPassword) }
             )
 
-            Route.Otp -> OtpScreen(
+            Route.Signup -> SignupScreen(
+                onRegistered = { nav.replaceAll(Route.Home) },
+                onLogin = { nav.pop() },
+                onBack = { nav.pop() }
+            )
+
+            Route.ForgotPassword -> ForgotPasswordScreen(
                 onBack = { nav.pop() },
-                onVerified = { nav.replaceAll(Route.Home) }
+                onDone = { nav.replaceAll(Route.Login) }
             )
 
-            Route.Home -> HomeShell(
-                tab = tab,
-                onTabChange = { tab = it },
-                onOpenChat = { nav.push(Route.Chat(it)) },
-                onAudioCall = { nav.push(Route.AudioCall(it)) },
-                onVideoCall = { nav.push(Route.VideoCall(it)) },
-                onIncomingCall = { nav.push(Route.IncomingCall(SampleData.ayesha.id)) },
-                onLogOut = { nav.replaceAll(Route.Phone) }
-            )
+            Route.Home -> {
+                HomeShell(
+                    tab = tab,
+                    onTabChange = { tab = it },
+                    onOpenChat = { nav.push(Route.Chat(it)) },
+                    onAudioCall = { nav.push(Route.AudioCall(it)) },
+                    onVideoCall = { nav.push(Route.VideoCall(it)) },
+                    onIncomingCall = { nav.push(Route.IncomingCall(SampleData.ayesha.id)) },
+                    onLogOut = {
+                        auth.logout()
+                        ContactsRepository.clear()
+                        MeRepository.clear()
+                        nav.replaceAll(Route.Login)
+                    }
+                )
+
+                // Signing in is the moment the address book becomes useful, so the
+                // ask happens here rather than behind the People tab.
+                ContactsAccessGate()
+            }
 
             is Route.Chat -> ChatScreen(
                 conversationId = route.conversationId,

@@ -659,6 +659,30 @@ object IqIcons {
         }
     }
 
+    private fun PathBuilder.eyeOutline() {
+        moveTo(2.4f, 12f)
+        curveTo(4.9f, 7.4f, 8.3f, 5.2f, 12f, 5.2f)
+        curveTo(15.7f, 5.2f, 19.1f, 7.4f, 21.6f, 12f)
+        curveTo(19.1f, 16.6f, 15.7f, 18.8f, 12f, 18.8f)
+        curveTo(8.3f, 18.8f, 4.9f, 16.6f, 2.4f, 12f)
+        close()
+    }
+
+    val Eye = icon("Eye") {
+        line {
+            eyeOutline()
+            circle(12f, 12f, 3.2f)
+        }
+    }
+
+    val EyeOff = icon("EyeOff") {
+        line {
+            eyeOutline()
+            circle(12f, 12f, 3.2f)
+        }
+        line(2.2f) { moveTo(3.6f, 3.2f); lineTo(20.4f, 20.8f) }
+    }
+
     val Clock = icon("Clock") {
         line {
             circle(12f, 12f, 9f)
