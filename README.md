@@ -76,6 +76,129 @@ To reach the incoming-call screen while testing: **Chats → ⋮ → Simulate in
 
 ---
 
+## App shell — activity, navigation, state
+
+### One activity, no fragments
+
+[`MainActivity`](app/src/main/java/com/iqsocial/iq_message/MainActivity.kt) is a
+`ComponentActivity` whose entire body is:
+
+```kotlin
+enableEdgeToEdge(
+    statusBarStyle = SystemBarStyle.dark(TRANSPARENT),
+    navigationBarStyle = SystemBarStyle.dark(TRANSPARENT)
+)
+setContent { IQMessageTheme { IqApp() } }
+```
+
+Both bars are **transparent**, and the icon contrast is not set here — each screen
+declares its own, because the app alternates between a crimson hero (light icons)
+and white sheets (dark icons):
+
+```kotlin
+SystemBarIcons(darkIcons = true)   // first line of most screens
+```
+
+That writes through `WindowInsetsControllerCompat` inside a `SideEffect`, and
+returns early under `LocalInspectionMode` so `@Preview` never reaches for a window
+that does not exist. The activity ships one preview, at 411 × 915 — the mockups'
+own width.
+
+### Manifest
+
+```xml
+<activity android:name=".MainActivity" android:exported="true"
+          android:theme="@style/Theme.IQMessage">
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+</activity>
+```
+
+One activity, one launcher entry. `supportsRtl` and `allowBackup` are the template's
+defaults. Note what is **absent**: no `android:configChanges` and no
+`android:screenOrientation`, so the system recreates the activity on rotation — see
+[Where state lives](#where-state-lives).
+
+### Navigation
+
+A sealed `Route` and a hand-rolled stack in
+[`IqApp.kt`](app/src/main/java/com/iqsocial/iq_message/IqApp.kt), not
+navigation-compose:
+
+```kotlin
+sealed interface Route {
+    data object Login : Route
+    data object Signup : Route
+    data object ForgotPassword : Route
+    data object Home : Route
+    data class Chat(val conversationId: String) : Route
+    data class IncomingCall(val personId: String) : Route
+    data class VideoCall(val personId: String) : Route
+    data class AudioCall(val personId: String) : Route
+}
+```
+
+`Navigator` wraps a `SnapshotStateList<Route>` with `push`, `pop` and `replaceAll`;
+`current` is simply the last entry. Sign-in uses **`replaceAll`**, so the auth
+screens cannot be reached again with the back button. Transitions are an
+`AnimatedContent` slide-and-fade.
+
+**The four Home tabs are not routes.** They are one `HomeShell` switching on a `tab`
+value, so moving between Chats, Calls, People and Settings never grows the back
+stack — back from any tab leaves the app rather than walking through tab history.
+
+**Back is handled at two levels.** The app registers
+`BackHandler(enabled = nav.canGoBack) { nav.pop() }`. Screens with internal steps
+register their own, which takes precedence because it is nested deeper:
+
+| Screen | Back does |
+|---|---|
+| Sign up, step 2 | returns to step 1, keeping the verified number |
+| Forgot password, steps 2–3 | returns to the previous step |
+| anything else | pops the route |
+
+Without those, system back would pop the whole route and throw away a number the
+server had already cleared.
+
+### Where state lives
+
+There is no `ViewModel` and no DI container — the same
+[no-new-dependency rule](#deliberate-constraints) that shapes the rest of the app.
+State sits in three places, and they behave differently:
+
+| State | Held by | Survives rotation | Survives process death | Cleared on log-out |
+|---|---|---|---|---|
+| Token, user, device id, contacts-prompted flag | `SessionStore` → `SharedPreferences` | ✅ | ✅ | ✅ (device id kept) |
+| Selected Home tab | `rememberSaveable` | ✅ | ✅ | — |
+| **Route back stack** | `remember` | ❌ | ❌ | — |
+| **Screen form fields** | `remember` | ❌ | ❌ | — |
+| Address book + matches | `ContactsRepository` (object) | ✅ | ❌ | ✅ |
+| Messenger profile | `MeRepository` (object) | ✅ | ❌ | ✅ |
+
+`rememberSaveable` is used exactly once in the codebase, for the tab. Everything
+else in the composition is plain `remember`, which is discarded when the activity is
+recreated — so **rotating the device returns to the start destination and empties
+any half-filled form**. The app is not orientation-locked, so this is reachable; see
+[Known gaps](#known-gaps).
+
+The two process-level objects sit *outside* the composition, which is why they
+survive rotation for free. They die with the process and are re-fetched on the next
+launch, each guarded by its own `loaded` flag so returning to a screen does not
+re-request.
+
+### Lifecycle and coroutines
+
+The activity overrides nothing but `onCreate`; there is no `onResume`/`onPause` work,
+and nothing is registered that would need unregistering. Every network call is
+launched from a composition scope — `rememberCoroutineScope()` for taps,
+`LaunchedEffect` for on-appear loads — so in-flight work is cancelled when the
+composable leaves. `ApiClient` does its I/O on `Dispatchers.IO` and each call sets
+its own connect/read timeout of 20 s.
+
+---
+
 ## Two servers
 
 The app talks to two hosts, and they are complementary rather than alternatives:
@@ -589,6 +712,15 @@ and the Notifications switch is local state that persists nowhere.
 **Chat and calls are still `SampleData`.** Auth, contacts and the profile talk to
 the server; conversations, messages and call history do not, and the messenger API
 has no routes for them yet.
+
+**Rotation resets navigation.** The back stack and every screen's form state are
+held in `remember`, and the activity has no `configChanges`, so turning the device
+sends the user back to the start destination with their typing gone. Fixing it means
+either a `Saver` for the stack plus `rememberSaveable` on the form fields, or locking
+the activity to portrait — the mockups are portrait-only, so the second is the
+cheaper honest answer. *(Read off the code — `remember` does not survive activity
+recreation — rather than reproduced on a device; it is not in the
+[verification table](#verification).)*
 
 **`PhoneScreen.kt` / `OtpScreen.kt` are orphaned.** Their composables are no longer
 routed (login replaced them), but `PhoneScreen.kt` still defines shared helpers
