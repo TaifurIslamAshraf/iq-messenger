@@ -20,29 +20,37 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
-import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
-import com.iqsocial.iq_message.ui.components.rememberContactsRequest
+import com.iqsocial.iq_message.data.remote.ApiResult
+import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
+import com.iqsocial.iq_message.ui.components.rememberContactsRequest
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.CrimsonTint
@@ -51,7 +59,7 @@ import com.iqsocial.iq_message.ui.theme.InkMuted
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.OnlineGreen
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
-
+import kotlinx.coroutines.launch
 /**
  * Not one of the supplied mockups — built in the same visual language so the
  * People tab in the bottom bar leads somewhere real.
@@ -63,8 +71,9 @@ import com.iqsocial.iq_message.ui.theme.SystemBarIcons
  * Falls back to the sample set when contacts were skipped or the device has none,
  * so the tab is never empty in a demo.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PeopleScreen(onOpenChat: (String) -> Unit) {
+fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
     SystemBarIcons(darkIcons = true)
     val d = IqTheme.dimens
     var query by remember { mutableStateOf("") }
@@ -77,9 +86,18 @@ fun PeopleScreen(onOpenChat: (String) -> Unit) {
     // you can actually message, so an address book full of numbers that are not on
     // IQ Social is noise rather than content.
     val onIq = remember(deviceContacts, matches) {
-        deviceContacts.filter { ContactsRepository.matchFor(it) != null }
+        deviceContacts.mapNotNull { contact ->
+            val match = ContactsRepository.matchFor(contact) ?: return@mapNotNull null
+            // The address book has no picture to give; the matched account does, and
+            // this list is only ever accounts.
+            contact.copy(photo = match.profilePicture)
+        }
     }
-    val source = if (deviceContacts.isNotEmpty()) onIq else SampleData.contacts
+    val source = onIq
+
+    val context = LocalContext.current
+    val session = remember { SessionStore(context) }
+    val scope = rememberCoroutineScope()
 
     // Distinguishes "nobody matched" from "we never got to ask", which need
     // different things said about them.
@@ -92,12 +110,28 @@ fun PeopleScreen(onOpenChat: (String) -> Unit) {
             .toSortedMap()
     }
 
-    LazyColumn(
-        Modifier
-            .fillMaxSize()
-            .background(Color.White),
-        contentPadding = PaddingValues(bottom = d.gapXl)
+    // Re-reads the address book and asks the server again who is on IQ Social.
+    // Someone who has just saved a number and come here to message them is the
+    // whole reason this tab is ever pulled.
+    var pull by remember { mutableIntStateOf(0) }
+    val pullContext = LocalContext.current
+    LaunchedEffect(pull) {
+        if (pull > 0) {
+            ContactsRepository.refresh(pullContext, SessionStore(pullContext).token)
+        }
+    }
+
+    PullToRefreshBox(
+        isRefreshing = ContactsRepository.syncing,
+        onRefresh = { pull++ },
+        modifier = Modifier.fillMaxSize()
     ) {
+        LazyColumn(
+            Modifier
+                .fillMaxSize()
+                .background(Color.White),
+            contentPadding = PaddingValues(bottom = d.gapXl)
+        ) {
         item {
             Row(
                 Modifier
@@ -116,8 +150,8 @@ fun PeopleScreen(onOpenChat: (String) -> Unit) {
                 )
                 CircleIconButton(
                     icon = IqIcons.PersonAdd,
-                    contentDescription = "Add contact",
-                    onClick = {},
+                    contentDescription = "Find people on IQ Social",
+                    onClick = onFindPeople,
                     iconSize = d.iconLg
                 )
                 CircleIconButton(
@@ -198,9 +232,14 @@ fun PeopleScreen(onOpenChat: (String) -> Unit) {
             people.forEach { person ->
                 item(key = person.id) {
                     ContactRow(person) {
-                        val conversation = SampleData.conversations
-                            .firstOrNull { it.person.id == person.id }
-                        onOpenChat(conversation?.id ?: SampleData.conversations.first().id)
+                        // The contact is an IQ user by definition here, so their
+                        // uid opens the conversation, creating it if needed.
+                        val uid = ContactsRepository.matchFor(person)?.uid ?: return@ContactRow
+                        val token = session.token ?: return@ContactRow
+                        scope.launch {
+                            val r = ConversationsApi.open(token, uid)
+                            if (r is ApiResult.Success) onOpenChat(r.data.id)
+                        }
                     }
                     HairlineDivider(
                         Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
@@ -208,6 +247,7 @@ fun PeopleScreen(onOpenChat: (String) -> Unit) {
                 }
             }
         }
+    }
     }
 }
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- How tall a chat bubble opens.
+
+         A request, not a rule: the system clamps it to what the screen and the
+         keyboard leave, so this is the height on a phone with room to spare. Tall
+         enough for a handful of messages and the composer under them, because a
+         bubble shorter than that is a preview rather than a conversation. -->
+    <dimen name="bubble_height">560dp</dimen>
+
+</resources>

@@ -25,8 +25,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.ContentScale
+import com.iqsocial.iq_message.data.media.RemoteImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +57,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.iqsocial.iq_message.data.BubbleGroup
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.Hairline
@@ -82,6 +90,12 @@ fun avatarBrush(seed: Int): Brush {
     return Brush.linearGradient(listOf(top, bottom))
 }
 
+/**
+ * Someone's face, or a stand-in for it.
+ *
+ * The gradient and initials appear while the photo loads, or if it is absent.
+ * Once it is ready, skip the covered text layout on each avatar in the thread.
+ */
 @Composable
 fun Avatar(
     person: Person,
@@ -103,19 +117,40 @@ fun Avatar(
                     .border(ringWidth, ringColor, CircleShape)
             )
         }
+        // Starting from the cache means an avatar already seen does not fade in
+        // again every time it scrolls back into view.
+        var photo by remember(person.photo) { mutableStateOf(RemoteImage.peek(person.photo)) }
+        LaunchedEffect(person.photo) {
+            if (photo == null && person.photo.isNotBlank()) {
+                photo = RemoteImage.load(person.photo)
+            }
+        }
+
         Box(
             Modifier
                 .size(size)
                 .clip(CircleShape)
-                .background(avatarBrush(person.seed)),
+                .background(remember(person.seed) { avatarBrush(person.seed) }),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = person.initials,
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = (size.value * 0.34f).sp
-            )
+            val image = photo
+            if (image == null) {
+                Text(
+                    text = remember(person.name) { person.initials },
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = (size.value * 0.34f).sp
+                )
+            } else {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    // Cropped, not fitted: a portrait letterboxed inside a circle
+                    // would show the gradient down two sides.
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(size)
+                )
+            }
         }
         if (showPresence && person.online) {
             val dot = (size.value * 0.27f).coerceIn(11f, 22f).dp
@@ -228,10 +263,20 @@ fun DrawScope.drawHeroBokeh(tint: Color = Color.White) {
 /* -- chat bubbles --------------------------------------------------------- */
 
 /** Message bubble with a tail on the sender's side, matching the mockup silhouette. */
-class BubbleShape(
+/**
+ * A message bubble: a rounded rectangle, and nothing else.
+ *
+ * No tail. Messenger dropped the nub years ago, and it is what made these read as
+ * speech balloons rather than as a thread - the avatar beside a run already says
+ * who is speaking, so the tail was doing no work.
+ *
+ * Within a run the corners that face a neighbour tighten, which is what turns a
+ * burst into one block instead of three separate balloons.
+ */
+data class BubbleShape(
     private val fromMe: Boolean,
-    private val radius: Dp = 18.dp,
-    private val tail: Dp = 9.dp
+    private val radius: Dp = 20.dp,
+    private val group: BubbleGroup = BubbleGroup.SINGLE
 ) : Shape {
     override fun createOutline(
         size: Size,
@@ -239,38 +284,25 @@ class BubbleShape(
         density: Density
     ): Outline {
         val r = with(density) { radius.toPx() }
-        val t = with(density) { tail.toPx() }
-        val w = size.width
-        val h = size.height
-        val big = CornerRadius(r, r)
-        val small = CornerRadius(r * 0.2f, r * 0.2f)
+        // Never rounder than the bubble is tall, or a one-line message turns oval.
+        val full = CornerRadius(r.coerceAtMost(size.height / 2f), r.coerceAtMost(size.height / 2f))
+        val tight = CornerRadius(r * 0.25f, r * 0.25f)
 
-        val body = Path().apply {
-            addRoundRect(
-                if (fromMe) RoundRect(
-                    rect = Rect(0f, 0f, (w - t).coerceAtLeast(r * 2), h),
-                    topLeft = big, topRight = big, bottomRight = small, bottomLeft = big
-                ) else RoundRect(
-                    rect = Rect(t, 0f, w, h),
-                    topLeft = big, topRight = big, bottomRight = big, bottomLeft = small
-                )
-            )
-        }
-        val tailPath = Path().apply {
-            // Short, low tail. A tall one reads as a spike rather than a bubble nub.
-            if (fromMe) {
-                moveTo(w - t - 1f, h - t * 0.95f)
-                cubicTo(w - t * 0.2f, h - t * 0.7f, w - t * 0.1f, h - t * 0.2f, w, h)
-                lineTo(w - t - 1f, h)
-            } else {
-                moveTo(t + 1f, h - t * 0.95f)
-                cubicTo(t * 0.2f, h - t * 0.7f, t * 0.1f, h - t * 0.2f, 0f, h)
-                lineTo(t + 1f, h)
-            }
-            close()
-        }
-        val merged = Path().apply { op(body, tailPath, PathOperation.Union) }
-        return Outline.Generic(merged)
+        val joinsAbove = group == BubbleGroup.MIDDLE || group == BubbleGroup.LAST
+        val joinsBelow = group == BubbleGroup.FIRST || group == BubbleGroup.MIDDLE
+
+        // Only the edge the run stacks along tightens; the far side stays round.
+        val topInner = if (joinsAbove) tight else full
+        val bottomInner = if (joinsBelow) tight else full
+
+        val rect = RoundRect(
+            rect = Rect(0f, 0f, size.width, size.height),
+            topLeft = if (fromMe) full else topInner,
+            topRight = if (fromMe) topInner else full,
+            bottomRight = if (fromMe) bottomInner else full,
+            bottomLeft = if (fromMe) full else bottomInner
+        )
+        return Outline.Rounded(rect)
     }
 }
 

@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -34,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,13 +49,17 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.iqsocial.iq_message.data.Person
-import com.iqsocial.iq_message.data.SampleData
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.remote.MessengerProfile
+import com.iqsocial.iq_message.data.remote.NotificationPreview
+import kotlinx.coroutines.launch
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
@@ -75,9 +81,9 @@ import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
     SystemBarIcons(darkIcons = false)
     val d = IqTheme.dimens
-    val me = SampleData.me
-    var notificationsOn by remember { mutableStateOf(true) }
     val headerHeight = d.scaled(248)
+    val scope = rememberCoroutineScope()
+    var previewPicker by remember { mutableStateOf(false) }
 
     // The real profile, which only /v1/me can supply. Fetched once per launch and
     // cached, so switching tabs does not re-request it.
@@ -86,6 +92,12 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
     val profile = MeRepository.profile
     LaunchedEffect(Unit) {
         if (!MeRepository.loaded) MeRepository.load(session.token)
+    }
+
+    // The account's settings, read the same way and for the same reason: the screen
+    // shows both, and a tab change should not re-request either.
+    LaunchedEffect(Unit) {
+        if (!SettingsRepository.loaded) SettingsRepository.load(session.token)
     }
 
     Column(
@@ -150,7 +162,7 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                 }
 
                 Spacer(Modifier.height(d.gapLg))
-                IdentityCard(me, profile)
+                IdentityCard(profile)
             }
         }
 
@@ -225,22 +237,69 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                 }
 
                 SettingDivider()
+                // What a notification is allowed to say, which `/v1/settings` owns.
+                //
+                // This was a switch wired to a `remember` - it moved, and nothing
+                // happened. The setting behind it is not a boolean anyway: it has
+                // three values, and a switch cannot show the middle one.
                 SettingRow(
                     icon = IqIcons.Bell,
                     iconTint = CrimsonTint,
                     title = "Notifications",
-                    subtitle = "Messages, calls & updates"
+                    subtitle = SettingsRepository.notificationPreview.summary,
+                    onClick = { previewPicker = true }
+                ) {
+                    if (SettingsRepository.saving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(d.icon),
+                            color = Crimson,
+                            strokeWidth = d.scaled(2)
+                        )
+                    } else {
+                        Text(
+                            SettingsRepository.notificationPreview.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = InkMuted,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.width(d.gapSm))
+                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                    }
+                }
+
+                SettingDivider()
+                // A switch, and this one is wired to something.
+                //
+                // The setting behind it really is a boolean, unlike the three-valued
+                // one above, and the server applies it the moment it answers: whoever
+                // is watching this account's presence is sent an event. So what the
+                // switch shows is what the people on the other end are seeing.
+                SettingRow(
+                    icon = if (SettingsRepository.showActiveStatus) IqIcons.Eye
+                    else IqIcons.EyeOff,
+                    iconTint = CrimsonTint,
+                    title = "Active status",
+                    subtitle = if (SettingsRepository.showActiveStatus) {
+                        "Others can see when you're online"
+                    } else {
+                        "Your online and last seen are hidden"
+                    }
                 ) {
                     Switch(
-                        checked = notificationsOn,
-                        onCheckedChange = { notificationsOn = it },
+                        checked = SettingsRepository.showActiveStatus,
+                        // Held still while a write is in flight, so it cannot be
+                        // flipped twice into a race whose loser is whatever the
+                        // second reply happens to be.
+                        enabled = !SettingsRepository.saving,
+                        onCheckedChange = { want ->
+                            scope.launch {
+                                SettingsRepository.setActiveStatus(session.token, want)
+                            }
+                        },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = Crimson,
-                            checkedBorderColor = Crimson,
-                            uncheckedThumbColor = Color.White,
-                            uncheckedTrackColor = InkFaint,
-                            uncheckedBorderColor = InkFaint
+                            checkedBorderColor = Crimson
                         )
                     )
                 }
@@ -290,6 +349,26 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
             Spacer(Modifier.height(d.gapXl))
         }
     }
+
+    if (previewPicker) {
+        NotificationPreviewPicker(
+            current = SettingsRepository.notificationPreview,
+            onPick = { option ->
+                scope.launch {
+                    // Closed only once it took. A failed write leaves the sheet up
+                    // with the reason under it, because the alternative is a screen
+                    // that quietly goes back to the old value with no explanation.
+                    if (SettingsRepository.setNotificationPreview(session.token, option)) {
+                        previewPicker = false
+                    }
+                }
+            },
+            onDismiss = {
+                previewPicker = false
+                SettingsRepository.clearError()
+            }
+        )
+    }
 }
 
 /**
@@ -308,6 +387,132 @@ private fun abbreviate(value: Int, unit: Int, suffix: String): String {
     val whole = value / unit
     val tenth = (value % unit) * 10 / unit
     return if (tenth == 0) "$whole$suffix" else "$whole.$tenth$suffix"
+}
+
+/** What the row says underneath "Notifications". */
+private val NotificationPreview.summary: String
+    get() = when (this) {
+        NotificationPreview.NAME_AND_TEXT -> "Sender and message shown"
+        NotificationPreview.NAME_ONLY -> "Sender shown, message hidden"
+        NotificationPreview.NOTHING -> "Sender and message hidden"
+    }
+
+/** What the row says on the right, and what the picker lists. */
+private val NotificationPreview.label: String
+    get() = when (this) {
+        NotificationPreview.NAME_AND_TEXT -> "Name and text"
+        NotificationPreview.NAME_ONLY -> "Name only"
+        NotificationPreview.NOTHING -> "Nothing"
+    }
+
+private val NotificationPreview.detail: String
+    get() = when (this) {
+        NotificationPreview.NAME_AND_TEXT ->
+            "Who wrote, and the start of what they said."
+        NotificationPreview.NAME_ONLY ->
+            "Who wrote. What they said is not sent to this phone at all."
+        NotificationPreview.NOTHING ->
+            "Only that a message arrived. Neither name nor text leaves the server."
+    }
+
+/**
+ * The three choices.
+ *
+ * Worth saying in the sheet rather than leaving to a help page: this is not about
+ * what the phone draws on its lock screen. The hidden part is never sent, so it
+ * cannot be read off this device by anyone, including anything else installed on it.
+ * That is the reason to choose the narrower option, and a list of three bare labels
+ * would not say it.
+ */
+@Composable
+private fun NotificationPreviewPicker(
+    current: NotificationPreview,
+    onPick: (NotificationPreview) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val d = IqTheme.dimens
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(d.radiusXl))
+                .background(Color.White)
+                .padding(d.gapLg)
+        ) {
+            Text(
+                "Notification preview",
+                style = MaterialTheme.typography.headlineSmall,
+                color = Ink
+            )
+            Spacer(Modifier.height(d.gapXs))
+            Text(
+                "Whatever is hidden is never sent to your phones. It applies to " +
+                    "every device on your account, from the next message on. Calls " +
+                    "always say who is calling.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = InkMuted
+            )
+
+            Spacer(Modifier.height(d.gapMd))
+            NotificationPreview.entries.forEach { option ->
+                val chosen = option == current
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .clickable { onPick(option) }
+                        .padding(vertical = d.gapSm, horizontal = d.gapSm),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(d.icon)
+                            .clip(CircleShape)
+                            .background(if (chosen) Crimson else Color.Transparent)
+                            .border(
+                                if (chosen) 0.dp else 2.dp,
+                                InkFaint,
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (chosen) {
+                            Icon(
+                                IqIcons.Check,
+                                null,
+                                Modifier.size(d.iconSm),
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(d.gapMd))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            option.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Ink
+                        )
+                        Text(
+                            option.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = InkMuted
+                        )
+                    }
+                }
+            }
+
+            SettingsRepository.error?.let { why ->
+                Spacer(Modifier.height(d.gapSm))
+                Text(
+                    why,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Crimson,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
 }
 
 /** Turns an API enum such as `my_contacts` into something readable. */
@@ -330,34 +535,23 @@ private fun PageWidth(content: @Composable androidx.compose.foundation.layout.Co
 }
 
 @Composable
-private fun IdentityCard(sample: Person, profile: MessengerProfile?) {
+private fun IdentityCard(profile: MessengerProfile?) {
     val d = IqTheme.dimens
     val editSize = d.iconButtonLg
 
-    // Real profile where there is one, mockup data until then. Building a Person
-    // from it keeps the avatar's generated gradient and initials tied to the real
-    // identity rather than to "Rafi Hasan".
-    val me = remember(profile, sample) {
-        profile?.let {
-            Person(
-                id = it.uid.ifBlank { sample.id },
-                name = it.fullname.ifBlank { sample.name },
-                handle = it.phoneNumber.ifBlank { sample.handle },
-                online = it.isOnline
-            )
-        } ?: sample
+    // Building a Person from the profile keeps the avatar's generated gradient
+    // and initials tied to the real identity.
+    val me = remember(profile) {
+        Person(
+            id = profile?.uid.orEmpty().ifBlank { "me" },
+            name = profile?.fullname.orEmpty().ifBlank { "Your profile" },
+            handle = profile?.phoneNumber.orEmpty(),
+            online = profile?.isOnline == true,
+            photo = profile?.profilePicture.orEmpty()
+        )
     }
-    // A real account with an empty bio must not inherit the mockup's line — that
-    // would show the user a bio they never wrote. The sample copy belongs to sample
-    // mode only; a loaded profile with no bio invites one instead.
-    val bio = when {
-        profile == null -> "Creating smarter connections."
-        profile.bio.isNotBlank() -> profile.bio
-        else -> null
-    }
-    // The tick was hardcoded. With a real profile it has to follow `verified`;
-    // without one the mockup's look stands, since the whole card is sample data.
-    val verified = profile?.isVerified ?: true
+    val bio = profile?.bio?.takeIf { it.isNotBlank() }
+    val verified = profile?.isVerified == true
     PageWidth {
         Column(
             Modifier
@@ -380,7 +574,7 @@ private fun IdentityCard(sample: Person, profile: MessengerProfile?) {
                         ringColor = Color.White,
                         ringGap = 0.dp,
                         // Respects the user's own "show active status" setting.
-                        showPresence = profile?.showActiveStatus ?: true
+                        showPresence = profile?.showActiveStatus == true
                     )
                     Spacer(Modifier.width(d.gapMd))
                     Column(
@@ -448,22 +642,15 @@ private fun IdentityCard(sample: Person, profile: MessengerProfile?) {
                     .padding(vertical = d.gapLg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Real counts once /v1/me has answered; the mockup's numbers until
-                // then, so the card never shows a row of zeroes while loading.
-                StatCell(
-                    profile?.let { compactCount(it.totalPost) } ?: "128",
-                    "Posts", Modifier.weight(1f)
-                )
+                // A dash until /v1/me answers: a placeholder number would be a lie.
+                StatCell(profile?.let { compactCount(it.totalPost) } ?: "-",
+                    "Posts", Modifier.weight(1f))
                 StatDivider()
-                StatCell(
-                    profile?.let { compactCount(it.followers) } ?: "12.6K",
-                    "Followers", Modifier.weight(1f)
-                )
+                StatCell(profile?.let { compactCount(it.followers) } ?: "-",
+                    "Followers", Modifier.weight(1f))
                 StatDivider()
-                StatCell(
-                    profile?.let { compactCount(it.following) } ?: "584",
-                    "Following", Modifier.weight(1f)
-                )
+                StatCell(profile?.let { compactCount(it.following) } ?: "-",
+                    "Following", Modifier.weight(1f))
             }
         }
     }
@@ -516,13 +703,17 @@ private fun SettingRow(
     iconTint: Color,
     title: String,
     subtitle: String,
+    // Every row was already `clickable` with an empty lambda, so each one rippled
+    // and did nothing. Rows that lead somewhere pass this; the rest stay inert and
+    // now say so by not rippling.
+    onClick: (() -> Unit)? = null,
     trailing: @Composable () -> Unit
 ) {
     val d = IqTheme.dimens
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { }
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .heightIn(min = 58.dp)
             .padding(horizontal = d.gapLg, vertical = d.gapSm),
         verticalAlignment = Alignment.CenterVertically

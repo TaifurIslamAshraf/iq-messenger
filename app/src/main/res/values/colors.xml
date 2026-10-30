@@ -7,4 +7,8 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Crimson, the same brand red the app draws with. Android tints the small
+         icon of a notification it shows itself with this. -->
+    <color name="notification_accent">#FFE8114C</color>
 </resources>

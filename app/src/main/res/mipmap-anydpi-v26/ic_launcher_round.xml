@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The launcher icon, as the two layers Android composes itself.
+
+    `@mipmap`, not `@drawable`: the layers are now density-specific bitmaps cut
+    from the brand artwork, and mipmap is the folder whose contents survive a
+    density split - a launcher may ask for an icon at a density other than the
+    screen's own.
+
+    monochrome is the foreground again, which works because the foreground *is*
+    a silhouette: white mark, transparent everywhere else. A themed launcher
+    keeps the alpha and paints its own colour through it.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

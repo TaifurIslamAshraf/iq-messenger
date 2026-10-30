@@ -19,6 +19,18 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // LiveKit's audio routing (com.github.davidliu:audioswitch) is published to
+        // JitPack and nowhere else, and it is a hard dependency of livekit-android -
+        // so without this the call SDK cannot resolve at all.
+        //
+        // Narrowed to that one group on purpose: JitPack builds straight from git
+        // tags, so anything resolved through it is whatever that repository held at
+        // the time. One known artifact may come from there; the rest of the build
+        // stays on Google and Maven Central.
+        maven {
+            url = uri("https://jitpack.io")
+            content { includeGroup("com.github.davidliu") }
+        }
     }
 }
 

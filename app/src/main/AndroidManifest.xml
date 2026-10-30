@@ -7,6 +7,72 @@
     <!-- Asked for at runtime after sign-in; the app works without it. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Asked for at the moment the mic is first held, and again for a call. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Calls. The camera is asked for only when a video call actually starts, so
+         an audio-only user is never prompted for it. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Held for the proximity sensor during a voice call, so the screen goes off
+         against the ear. `PowerManager.newWakeLock` needs it, and without it the
+         call throws a SecurityException that the code was catching and ignoring -
+         so the screen simply never went off, with nothing to say why. -->
+    <!-- Floating chat heads over other apps. Asked for in Settings rather than at
+         runtime, and refusing it costs only the heads: messages still arrive as
+         notifications. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- The buzz beside an incoming call's ringtone. A normal permission with no
+         runtime prompt, so declaring it is the whole of it - and without it
+         Vibrator.vibrate throws a SecurityException that the ringer was catching,
+         leaving a phone that rings but never buzzes. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- For the floating heads. An overlay window does not keep a process alive -
+         Android kills it as "empty" the moment the last activity goes, and the heads
+         die with it - so while one is on screen the app has to declare itself.
+         `specialUse` because none of the other types describe a window the person
+         asked for. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Needed to see a Bluetooth headset at all from Android 12. Without it the
+         device list simply comes back without it, so a call would route to the
+         phone's own speaker and microphone with nothing to say why. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Lets a ringing call take a locked screen rather than arriving as a banner.
+         Android grants it to apps that actually place calls; without it the
+         notification still shows, just without the full-screen half. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- A phone without a camera can still take audio calls. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Asked for once, after sign-in. Refusing it costs only the notifications;
+         the app and its realtime socket work the same either way. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- For the in-app photo tray. Asked for when the tray is first opened;
+         refusing it leaves the system picker, which needs nothing. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14 lets someone grant a few photos instead of the whole roll.
+         Without declaring this the system treats that choice as a one-off and asks
+         again every time; with it, the selection sticks and the tray shows what was
+         chosen. The tray works either way - it simply lists fewer pictures. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -16,8 +82,45 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.IQMessage">
+        <!-- Hands the camera app a place to write the photo it takes.
+
+             No CAMERA permission is declared on purpose. The shot is taken by
+             whatever camera app is installed, through ACTION_IMAGE_CAPTURE, and
+             declaring the permission would turn that into a runtime prompt this
+             app has no need to make. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Portrait-locked: the mockups are portrait-only, and the nav stack and
+             every form field live in remember, so a recreation would drop the
+             user back at the start with their typing gone. -->
+        <!-- showWhenLocked/turnScreenOn: a ringing call has to be answerable
+             without unlocking the phone first. -->
+        <!-- supportsPictureInPicture: a call that is backed out of shrinks into a
+             floating window rather than disappearing. Without this the system
+             refuses enterPictureInPictureMode and the call simply vanishes behind
+             whatever is opened next.
+
+             configChanges goes with it and is not optional: entering and leaving the
+             window is a size and layout change, and an activity that lets Android
+             recreate it for those would be rebuilt twice per minimise - losing the
+             nav stack, the draft being typed and the renderer the call is drawn
+             into. -->
         <activity
             android:name=".MainActivity"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|uiMode|density"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.IQMessage">
@@ -27,6 +130,89 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- One chat in a floating bubble.
+
+             Every attribute here is load-bearing. The system embeds this activity in
+             a window of its own, and a notification whose bubble activity is not
+             embeddable and resizeable does not report an error - it simply arrives as
+             an ordinary notification. Note what is absent as much as what is present:
+             no screenOrientation, because a fixed orientation contradicts
+             resizeableActivity, and no exported, because nothing outside this app has
+             any business launching it.
+
+             documentLaunchMode is set for Android 10 and below, where it has to be
+             explicit for several chats to hold several bubbles at once. Android 11
+             and above set it themselves. -->
+        <activity
+            android:name=".BubbleActivity"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="always"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.IQMessage" />
+
+        <!-- Firebase wakes this when a message arrives and the app is not running.
+             Not exported: only the system delivers to it. -->
+        <service
+            android:name=".data.push.IqMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Keeps a call alive while the app is in the background. Android stops
+             a process that is only holding a microphone open; a call has to say what
+             it is doing and show a notification for it. -->
+        <service
+            android:name=".data.call.CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
+
+        <!-- Holds the process up while a head is floating. Without it the heads
+             and the panel they open are killed with the rest of an empty process,
+             which looks exactly like a head that does nothing when pressed. -->
+        <service
+            android:name=".data.overlay.HeadsService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps floating chat heads and their chat panel on
+                    screen while the app is not in front" />
+        </service>
+
+        <!-- Replying and liking from the shade. Not exported: only this app's own
+             notifications point at it. -->
+        <receiver
+            android:name=".data.push.NotificationActions"
+            android:exported="false" />
+
+        <!-- Mute, hang up and speaker, from the buttons on the floating call
+             window. The window is drawn by the system but the PendingIntents in it
+             are this app's, so nothing outside needs to reach this. -->
+        <receiver
+            android:name=".data.call.CallPipActions"
+            android:exported="false" />
+
+        <!-- The channel a notification lands in when the server sends a
+             notification payload rather than a data one, and the default colour and
+             icon for it. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="messages" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+        <!-- Firebase tints the small icon with this for notifications it shows
+             itself - a missed call while the app is away. Message pushes never get
+             that far: IqMessagingService.handleIntent takes them back, and the app
+             draws them as conversations. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent" />
     </application>
 
 </manifest>

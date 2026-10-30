@@ -12,10 +12,10 @@
 #   public *;
 #}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# A minified stack trace with no line numbers says only that something threw
+# somewhere. Keeping these costs a little size and is the difference between a
+# report that can be acted on and one that cannot.
+-keepattributes SourceFile,LineNumberTable
+# The line numbers are worth keeping; the original file names are not, and leaving
+# them in hands out the source layout.
+-renamesourcefileattribute SourceFile

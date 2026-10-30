@@ -13,7 +13,7 @@ import org.json.JSONObject
  * with real HTTP status codes.
  */
 object MessengerConfig {
-    const val BASE_URL = "https://messanger-server.gd2zih.easypanel.host"
+    const val BASE_URL = "https://messanger.iqamasocial.com"
 
     /** Limits from the spec; the request is trimmed to them rather than rejected. */
     const val MAX_PHONES = 20_000

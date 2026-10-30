@@ -47,15 +47,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
-import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.auth.SessionStore
+import com.iqsocial.iq_message.data.call.CallAudio
+import com.iqsocial.iq_message.data.call.CallCenter
+import com.iqsocial.iq_message.data.call.CallEngine
 import com.iqsocial.iq_message.ui.components.Avatar
-import com.iqsocial.iq_message.ui.components.EdgeCutShape
 import com.iqsocial.iq_message.ui.components.CircleIconButton
+import com.iqsocial.iq_message.ui.components.EdgeCutShape
+import com.iqsocial.iq_message.ui.components.rememberCameraToggle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.CallPanel
@@ -64,27 +69,42 @@ import com.iqsocial.iq_message.ui.theme.CrimsonBright
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.OnlineGreen
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
-import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
-
+import kotlinx.coroutines.delay
 @Composable
 fun AudioCallScreen(
-    personId: String,
     onMinimize: () -> Unit,
     onEnd: () -> Unit
 ) {
     SystemBarIcons(darkIcons = false)
     val d = IqTheme.dimens
-    val person = remember(personId) { SampleData.person(personId) }
-    var seconds by remember { mutableIntStateOf(138) }
-    var muted by remember { mutableStateOf(true) }
-    var speakerOn by remember { mutableStateOf(true) }
+    val call = CallCenter.call
+    val person = remember(call?.peer) { callerOf(call) }
+    val toggleCamera = rememberCameraToggle()
+    // What the call is actually doing, rather than the assumption that it is up.
+    val context = LocalContext.current
+    var adding by remember { mutableStateOf(false) }
+    val standing = standingOf(
+        call,
+        joined = CallEngine.connected,
+        reconnecting = CallEngine.reconnecting,
+        poor = CallEngine.poorConnection
+    )
 
-    LaunchedEffect(Unit) {
+    /**
+     * Counted from when it was **answered**, not from when the screen opened.
+     *
+     * The two differ by however long it rang, and by the whole call if this screen
+     * was reached from the notification half way through one.
+     */
+    var seconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(call?.answeredAt) {
+        val from = call?.answeredAt ?: 0L
         while (true) {
+            seconds =
+                if (from > 0L) ((System.currentTimeMillis() - from) / 1000).toInt() else 0
             delay(1000)
-            seconds++
         }
     }
 
@@ -134,18 +154,24 @@ fun AudioCallScreen(
                         color = Color.White,
                         maxLines = 1
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            IqIcons.Shield, null,
-                            Modifier.size(d.iconXs), tint = Color.White.copy(alpha = 0.6f)
-                        )
-                        Spacer(Modifier.width(d.gapXs))
-                        Text(
-                            "Encrypted",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.68f),
-                            maxLines = 1
-                        )
+                    // Only when it is. See the same guard on the video screen: this
+                    // build encrypts no call, so the shield was telling every
+                    // caller their audio was private while it went through the
+                    // server in the clear.
+                    if (call?.e2ee == true) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                IqIcons.Shield, null,
+                                Modifier.size(d.iconXs), tint = Color.White.copy(alpha = 0.6f)
+                            )
+                            Spacer(Modifier.width(d.gapXs))
+                            Text(
+                                "Encrypted",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.68f),
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
                 CircleIconButton(
@@ -178,7 +204,7 @@ fun AudioCallScreen(
                             Avatar(person = person, size = avatar)
                         }
                         Spacer(Modifier.width(d.gapMd))
-                        CallerText(person, seconds, Modifier.weight(1f))
+                        CallerText(person, seconds, standing, Modifier.weight(1f))
                     }
                 } else {
                     Column(
@@ -191,7 +217,7 @@ fun AudioCallScreen(
                         }
                         Spacer(Modifier.height(d.gapLg))
                         CallerText(
-                            person, seconds,
+                            person, seconds, standing,
                             Modifier.fillMaxWidth(),
                             centered = true
                         )
@@ -241,24 +267,42 @@ fun AudioCallScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
                         AudioControl(
-                            icon = if (muted) IqIcons.MicOff else IqIcons.Mic,
+                            icon = if (!CallEngine.micOn) IqIcons.MicOff else IqIcons.Mic,
                             label = "Mute",
                             active = false,
-                            onClick = { muted = !muted },
+                            onClick = { CallEngine.toggleMic() },
                             modifier = Modifier.weight(1f)
                         )
+                        // Three ways out, not two, once something is plugged in
+                        // or worn. A headset used to win and stay won, so there was
+                        // no way back to the phone without taking it off.
                         AudioControl(
-                            icon = IqIcons.Speaker,
-                            label = "Speaker",
-                            active = speakerOn,
-                            onClick = { speakerOn = !speakerOn },
+                            icon = CallAudio.route.icon,
+                            label = CallAudio.route.label,
+                            active = CallAudio.route != CallAudio.Route.EARPIECE,
+                            onClick = { CallEngine.cycleRoute() },
+                            modifier = Modifier.weight(1f)
+                        )
+                        // A voice call that grows a picture, which is how
+                        // Messenger does it and what there was no way to do here:
+                        // once a call started without video the only route to it was
+                        // hanging up and calling again.
+                        //
+                        // The camera is turned on and the screen follows - the call
+                        // object does not change type, because the server decides
+                        // that, and the picture is real either way.
+                        AudioControl(
+                            icon = IqIcons.Videocam,
+                            label = "Video",
+                            active = CallEngine.cameraOn,
+                            onClick = toggleCamera,
                             modifier = Modifier.weight(1f)
                         )
                         AudioControl(
                             icon = IqIcons.PersonAdd,
                             label = "Add Call",
                             active = false,
-                            onClick = {},
+                            onClick = { adding = true },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -295,12 +339,26 @@ fun AudioCallScreen(
             }
         }
     }
+
+    if (adding) {
+        AddToCallSheet(
+            token = remember { SessionStore(context).token },
+            // Whoever is already on it, so the list does not offer them again.
+            exclude = buildSet {
+                call?.peer?.uid?.let { add(it) }
+                call?.participants?.forEach { add(it.uid) }
+            },
+            onAdd = { uids -> CallCenter.invite(context, uids) },
+            onDismiss = { adding = false }
+        )
+    }
 }
 
 @Composable
 private fun CallerText(
     person: Person,
     seconds: Int,
+    standing: CallStanding,
     modifier: Modifier = Modifier,
     centered: Boolean = false
 ) {
@@ -317,29 +375,40 @@ private fun CallerText(
         )
         Spacer(Modifier.height(d.gapSm))
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // Green means there is a room with somebody in it. While it rings, or
+            // while this end is still joining, it is not that - and a green dot
+            // saying so was the screen's only answer to "did it get through?".
             Box(
                 Modifier
                     .size(d.scaled(11))
                     .clip(CircleShape)
-                    .background(OnlineGreen)
+                    .background(
+                        if (standing.connected) OnlineGreen
+                        else Color.White.copy(alpha = 0.45f)
+                    )
             )
             Spacer(Modifier.width(d.gapSm))
             Text(
-                "Connected",
+                standing.label,
                 style = MaterialTheme.typography.titleMedium,
                 color = Color.White.copy(alpha = 0.75f),
                 fontWeight = FontWeight.Normal,
                 maxLines = 1
             )
         }
-        Spacer(Modifier.height(d.gapSm))
-        Text(
-            formatDuration(seconds),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Medium,
-            color = Color.White,
-            maxLines = 1
-        )
+        // Only once there is something to count. A timer reading 0:00 beside a
+        // ringing phone says the call has been up for no time, which is the one
+        // thing it has not been.
+        if (seconds > 0) {
+            Spacer(Modifier.height(d.gapSm))
+            Text(
+                formatDuration(seconds),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                maxLines = 1
+            )
+        }
     }
 }
 

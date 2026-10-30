@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the camera's own folder inside the app cache is shared.
+
+    A provider that exposed the whole cache would hand every file the app has
+    downloaded to whatever opens the Uri; the camera needs one file, so it is given
+    one folder and nothing else.
+-->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

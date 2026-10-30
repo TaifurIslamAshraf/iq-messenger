@@ -42,7 +42,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.remote.CallType
+import com.iqsocial.iq_message.data.remote.ChatCall
+import com.iqsocial.iq_message.data.call.CallCenter
+import com.iqsocial.iq_message.data.Person
+import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.avatarBrush
@@ -55,13 +59,30 @@ import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 
 @Composable
 fun IncomingCallScreen(
-    personId: String,
     onDecline: () -> Unit,
     onAccept: () -> Unit
 ) {
     SystemBarIcons(darkIcons = false)
     val d = IqTheme.dimens
-    val person = remember(personId) { SampleData.person(personId) }
+    val call = CallCenter.call
+    val person = remember(call?.peer) { callerOf(call) }
+    /**
+     * Whether this is a video call, which this screen used to assume.
+     *
+     * It said "Incoming Video Call..." over a camera icon and offered a camera
+     * button to answer with, for every call - so a voice call looked like a video
+     * one right up to the moment it was answered, and the button promised a camera
+     * that was never going to turn on.
+     *
+     * `type` was there to be read the whole time: the ringing notification, the
+     * waiting bar, the service and the audio routing all branch on it already. This
+     * screen was the only place that did not, which made it the only place that
+     * could be wrong.
+     *
+     * Defaults to voice when there is no call, which is the quieter mistake of the
+     * two - and by then the screen is on its way out anyway.
+     */
+    val video = call?.type == CallType.VIDEO
     val transition = rememberInfiniteTransition(label = "ring")
     val pulse by transition.animateFloat(
         initialValue = 0f,
@@ -158,30 +179,35 @@ fun IncomingCallScreen(
                     Spacer(Modifier.height(d.gapMd))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            IqIcons.Videocam, null,
+                            if (video) IqIcons.Videocam else IqIcons.Phone, null,
                             Modifier.size(d.icon), tint = Color.White.copy(alpha = 0.92f)
                         )
                         Spacer(Modifier.width(d.gapSm))
                         Text(
-                            "Incoming Video Call...",
+                            if (video) "Incoming Video Call..." else "Incoming Voice Call...",
                             style = MaterialTheme.typography.titleLarge,
                             color = Color.White.copy(alpha = 0.92f),
                             maxLines = 1
                         )
                     }
-                    Spacer(Modifier.height(d.gapMd))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            IqIcons.Shield, null,
-                            Modifier.size(d.iconXs), tint = Color.White.copy(alpha = 0.55f)
-                        )
-                        Spacer(Modifier.width(d.gapSm))
-                        Text(
-                            "Encrypted call",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White.copy(alpha = 0.62f),
-                            maxLines = 1
-                        )
+                    // Only when it is. The same guard as on the two call screens -
+                    // and this is the worst place to claim it falsely, because it is
+                    // read while deciding whether to pick up.
+                    if (call?.e2ee == true) {
+                        Spacer(Modifier.height(d.gapMd))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                IqIcons.Shield, null,
+                                Modifier.size(d.iconXs), tint = Color.White.copy(alpha = 0.55f)
+                            )
+                            Spacer(Modifier.width(d.gapSm))
+                            Text(
+                                "Encrypted call",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White.copy(alpha = 0.62f),
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -205,7 +231,7 @@ fun IncomingCallScreen(
                     modifier = Modifier.weight(1f)
                 )
                 CallAction(
-                    icon = IqIcons.Videocam,
+                    icon = if (video) IqIcons.Videocam else IqIcons.Phone,
                     label = "Accept",
                     background = AcceptGreen,
                     onClick = onAccept,
@@ -265,4 +291,21 @@ private fun CallAction(
             maxLines = 1
         )
     }
+}
+
+/**
+ * The person on the other end, as the call itself reports them.
+ *
+ * Read from the call rather than looked up: a call can arrive from a push with no
+ * conversation loaded at all, and the server sends who is calling precisely so the
+ * ringing screen never has to guess.
+ */
+internal fun callerOf(call: ChatCall?): Person {
+    val peer = call?.peer
+    return Person(
+        id = peer?.uid.orEmpty(),
+        name = peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown",
+        handle = "",
+        photo = peer?.profilePicture.orEmpty()
+    )
 }

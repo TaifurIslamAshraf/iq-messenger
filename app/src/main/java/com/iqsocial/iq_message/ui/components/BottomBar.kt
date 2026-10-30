@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,6 +43,7 @@ enum class HomeTab(
     Chats("Chats", IqIcons.ChatFilled, IqIcons.ChatOutline),
     Calls("Calls", IqIcons.Phone, IqIcons.PhoneOutline),
     People("People", IqIcons.PeopleFilled, IqIcons.People),
+    Rewards("Rewards", IqIcons.Star, IqIcons.StarOutline),
     Settings("Settings", IqIcons.Settings, IqIcons.SettingsOutline)
 }
 
@@ -48,7 +51,9 @@ enum class HomeTab(
 fun IqBottomBar(
     selected: HomeTab,
     onSelect: (HomeTab) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Unread conversations, badged on the Chats tab. */
+    unread: Int = 0
 ) {
     val d = IqTheme.dimens
     Column(
@@ -70,6 +75,7 @@ fun IqBottomBar(
                     tab = tab,
                     active = tab == selected,
                     onClick = { onSelect(tab) },
+                    badge = if (tab == HomeTab.Chats) unread else 0,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -82,7 +88,8 @@ private fun TabItem(
     tab: HomeTab,
     active: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    badge: Int = 0
 ) {
     val d = IqTheme.dimens
     val tint by animateColorAsState(
@@ -110,6 +117,29 @@ private fun TabItem(
                 modifier = Modifier.size(d.navIcon),
                 tint = tint
             )
+            if (badge > 0) {
+                // Sits on the icon's top-right corner, outside the glyph's box so
+                // it never covers the shape it belongs to.
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = d.gapSm, y = -d.gapXs)
+                        .heightIn(min = d.scaled(18))
+                        .widthIn(min = d.scaled(18))
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(Crimson)
+                        .padding(horizontal = d.gapXs),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (badge > 99) "99+" else badge.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                }
+            }
         }
         Text(
             text = tab.label,

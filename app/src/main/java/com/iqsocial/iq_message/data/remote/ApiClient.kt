@@ -65,6 +65,26 @@ object ApiClient {
         baseUrl: String = MessengerConfig.BASE_URL
     ): ApiResult<JSONObject> = request("GET", path, null, token, baseUrl)
 
+    suspend fun put(
+        path: String,
+        body: JSONObject,
+        token: String? = null,
+        baseUrl: String = MessengerConfig.BASE_URL
+    ): ApiResult<JSONObject> = request("PUT", path, body, token, baseUrl)
+
+    suspend fun patch(
+        path: String,
+        body: JSONObject,
+        token: String? = null,
+        baseUrl: String = MessengerConfig.BASE_URL
+    ): ApiResult<JSONObject> = request("PATCH", path, body, token, baseUrl)
+
+    suspend fun delete(
+        path: String,
+        token: String? = null,
+        baseUrl: String = MessengerConfig.BASE_URL
+    ): ApiResult<JSONObject> = request("DELETE", path, null, token, baseUrl)
+
     private suspend fun request(
         method: String,
         path: String,
@@ -75,7 +95,17 @@ object ApiClient {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
-                requestMethod = method
+                // PATCH is awkward: the JDK's HttpURLConnection rejects it outright.
+                // The usual workaround — POST plus X-HTTP-Method-Override — was
+                // tried against this server and 404s ("Route not found: POST
+                // /v1/messages/{id}"), so the method is forced through instead.
+                // Android's implementation accepts PATCH; the reflection is there
+                // for the stricter JDK one that unit tests would run against.
+                try {
+                    requestMethod = method
+                } catch (_: java.net.ProtocolException) {
+                    forceMethod(this, method)
+                }
                 connectTimeout = ApiConfig.TIMEOUT_MS
                 readTimeout = ApiConfig.TIMEOUT_MS
                 setRequestProperty("Accept", "application/json")
@@ -153,5 +183,20 @@ object ApiClient {
         } finally {
             conn?.disconnect()
         }
+    }
+}
+
+/**
+ * Sets a request method the connection would otherwise refuse.
+ *
+ * Only reached when [HttpURLConnection.setRequestMethod] throws, which it does on
+ * the JDK for PATCH. Failing quietly is correct here: the request then goes as
+ * whatever method was already set, and the server reports the mismatch.
+ */
+private fun forceMethod(conn: HttpURLConnection, method: String) {
+    runCatching {
+        val field = HttpURLConnection::class.java.getDeclaredField("method")
+        field.isAccessible = true
+        field.set(conn, method)
     }
 }

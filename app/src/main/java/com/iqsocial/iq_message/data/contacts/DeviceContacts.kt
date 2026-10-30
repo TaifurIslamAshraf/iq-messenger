@@ -129,6 +129,17 @@ object ContactsRepository {
         private set
 
     /**
+     * True while the address book is being read and synced.
+     *
+     * Only here so a pull-to-refresh has something to hold its spinner open on.
+     * Without it the gesture would spring back the instant it was let go, whatever
+     * the sync was doing, and the one thing that gesture promises is that something
+     * is happening.
+     */
+    var syncing by mutableStateOf(false)
+        private set
+
+    /**
      * Reads the address book and, when signed in, syncs it so the server can say
      * which of those numbers already have accounts.
      *
@@ -136,18 +147,25 @@ object ContactsRepository {
      * People tab is useful without yet knowing who is on IQ Social.
      */
     suspend fun refresh(context: Context, token: String?) {
-        contacts = DeviceContacts.read(context)
-        loaded = true
-        if (token.isNullOrBlank() || contacts.isEmpty()) return
+        syncing = true
+        try {
+            contacts = DeviceContacts.read(context)
+            loaded = true
+            if (token.isNullOrBlank() || contacts.isEmpty()) return
 
-        val result = MessengerApi.syncContacts(
-            phones = contacts.map { it.handle },
-            region = DeviceContacts.region(context),
-            token = token
-        )
-        if (result is ApiResult.Success) {
-            lastSync = result.data
-            matches = result.data.matches.associateBy { numberKey(it.phone) }
+            val result = MessengerApi.syncContacts(
+                phones = contacts.map { it.handle },
+                region = DeviceContacts.region(context),
+                token = token
+            )
+            if (result is ApiResult.Success) {
+                lastSync = result.data
+                matches = result.data.matches.associateBy { numberKey(it.phone) }
+            }
+        } finally {
+            // In a finally, because the early return above is a normal path out and
+            // a flag left true would leave the spinner turning for good.
+            syncing = false
         }
     }
 
@@ -167,5 +185,6 @@ object ContactsRepository {
         loaded = false
         matches = emptyMap()
         lastSync = null
+        syncing = false
     }
 }

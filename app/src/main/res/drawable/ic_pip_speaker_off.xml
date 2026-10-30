@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Loudspeaker, off - earpiece or a headset.
+
+    A drawable rather than one of IqIcons' ImageVectors, because a
+    RemoteAction takes a resource: the row of buttons in a floating window is
+    drawn by the system, outside this app's process, where a Compose vector
+    cannot reach. Same 24dp viewport and same geometry as the icon it mirrors,
+    so the window and the full screen do not show two different mics.
+
+    White, and left that way: the system tints these itself.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11.2,4.7 a1.4,1.4 0 0 1 2.3,1.1 V18.2 a1.4,1.4 0 0 1 -2.3,1.1 L7.1,15.9 H4.6 a1.8,1.8 0 0 1 -1.8,-1.8 V9.9 a1.8,1.8 0 0 1 1.8,-1.8 H7.1 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M3.6,3.2 L20.4,20.8" />
+</vector>

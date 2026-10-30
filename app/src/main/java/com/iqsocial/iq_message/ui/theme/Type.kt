@@ -15,6 +15,48 @@ import androidx.compose.ui.unit.sp
  */
 private val Sans = FontFamily.Default
 
+/**
+ * What a message is read at: [Typography.bodyLarge] and a third again.
+ *
+ * Its own style rather than a bigger `bodyLarge`, because the two are not the same
+ * job. `bodyLarge` is the app's ordinary running text - list rows, field contents,
+ * banners - and everything there is laid out around its size. A message is the thing
+ * the screen exists for, and it is read at arm's length in a hurry.
+ *
+ * Derived rather than written out, so it keeps the window-derived scale that stops
+ * headlines wrapping mid-word on a small phone.
+ */
+val Typography.messageBody: TextStyle
+    get() = bodyLarge.copy(
+        fontSize = bodyLarge.fontSize * MESSAGE_SCALE,
+        lineHeight = bodyLarge.lineHeight * MESSAGE_SCALE
+    )
+
+// A third again was too much; fifteen per cent off that lands here.
+private const val MESSAGE_SCALE = 1.1f
+
+/**
+ * The emoji in the reaction tray.
+ *
+ * Bigger than the label style they were borrowing, because they are not labels -
+ * they are the targets, and the only thing in that row carrying meaning. At
+ * `titleLarge` they were the size of a word in a list.
+ *
+ * Only the glyph grows. The circles around them stay as they are: seven of them
+ * across a tray already come to 280dp, and widening those would push the row off the
+ * edge of a narrow phone - where a reaction that cannot be reached is worse than a
+ * small one.
+ *
+ * The line height goes up with the size so a tall emoji is not clipped at its top.
+ */
+val Typography.reactionTray: TextStyle
+    get() = titleLarge.copy(
+        fontSize = titleLarge.fontSize * REACTION_SCALE,
+        lineHeight = titleLarge.lineHeight * REACTION_SCALE
+    )
+
+private const val REACTION_SCALE = 1.3f
+
 fun iqTypography(s: Float = 1f): Typography = Typography(
     displaySmall = TextStyle(
         fontFamily = Sans, fontWeight = FontWeight.Bold,

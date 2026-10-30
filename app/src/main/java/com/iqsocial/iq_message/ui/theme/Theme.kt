@@ -49,18 +49,36 @@ fun IQMessageTheme(
     content: @Composable () -> Unit
 ) {
     BoxWithConstraints {
-        val widthDp = maxWidth.value
-        val heightDp = maxHeight.value
-        val dimens = remember(widthDp, heightDp) { buildIqDimens(widthDp, heightDp) }
-        val typography = remember(dimens.fontScale) { iqTypography(dimens.fontScale) }
+        IQMessageTheme(maxWidth.value, maxHeight.value, content)
+    }
+}
 
-        CompositionLocalProvider(LocalIqDimens provides dimens) {
-            MaterialTheme(
-                colorScheme = IqColorScheme,
-                typography = typography,
-                content = content
-            )
-        }
+/**
+ * The same theme for a window that already knows how big it is.
+ *
+ * [BoxWithConstraints] measures by subcomposing, and a subcomposition is the one
+ * thing the floating panel could not survive: composing the chat inside one, in a
+ * window handed to the window manager, tore the slot table apart on its first
+ * measure -
+ *
+ *     NullPointerException: RememberObserverHolder.getWrapped()
+ *       at RememberEventDispatcher.dispatchRememberList
+ *
+ * - while the very same content composed without it was fine. A window created by
+ * this app knows its own size without asking the layout, so it says so and there is
+ * no subcomposition to go wrong.
+ */
+@Composable
+fun IQMessageTheme(widthDp: Float, heightDp: Float, content: @Composable () -> Unit) {
+    val dimens = remember(widthDp, heightDp) { buildIqDimens(widthDp, heightDp) }
+    val typography = remember(dimens.fontScale) { iqTypography(dimens.fontScale) }
+
+    CompositionLocalProvider(LocalIqDimens provides dimens) {
+        MaterialTheme(
+            colorScheme = IqColorScheme,
+            typography = typography,
+            content = content
+        )
     }
 }
 

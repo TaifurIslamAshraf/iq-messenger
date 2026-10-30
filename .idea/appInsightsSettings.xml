@@ -8,10 +8,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="PLACEHOLDER" />
-                  <option name="mobileSdkAppId" value="" />
-                  <option name="projectId" value="" />
-                  <option name="projectNumber" value="" />
+                  <option name="appId" value="com.iqsocial.iq_message" />
+                  <option name="mobileSdkAppId" value="1:603689281042:android:489ccd6457f6ce47b0dacb" />
+                  <option name="projectId" value="iqama-social" />
+                  <option name="projectNumber" value="603689281042" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />

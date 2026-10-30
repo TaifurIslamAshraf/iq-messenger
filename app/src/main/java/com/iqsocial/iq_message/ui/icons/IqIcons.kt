@@ -352,6 +352,37 @@ object IqIcons {
         line(2.2f) { moveTo(3.6f, 3.2f); lineTo(20.4f, 20.8f) }
     }
 
+    /**
+     * The Bluetooth rune, for a call going to a wireless headset.
+     *
+     * Drawn as strokes rather than a filled glyph, like the rest of the family: one
+     * spine with a stroke crossing it each way, which is the mark itself.
+     */
+    val Bluetooth = icon("Bluetooth") {
+        line {
+            moveTo(12f, 2.6f); lineTo(12f, 21.4f)
+            moveTo(12f, 2.6f); lineTo(17.2f, 7.8f); lineTo(6.8f, 16.2f)
+            moveTo(12f, 21.4f); lineTo(17.2f, 16.2f); lineTo(6.8f, 7.8f)
+        }
+    }
+
+    /**
+     * Headphones, for a call going to something wired.
+     *
+     * Kept apart from [Bluetooth] because the route covers both and they are not the
+     * same thing to look at: a Bluetooth rune over a cabled headset is the icon
+     * naming the wrong device.
+     */
+    val Headset = icon("Headset") {
+        line {
+            moveTo(4.2f, 14.4f)
+            curveTo(4.2f, 8.2f, 7.6f, 4.6f, 12f, 4.6f)
+            curveTo(16.4f, 4.6f, 19.8f, 8.2f, 19.8f, 14.4f)
+        }
+        fill { roundRect(2.4f, 12.8f, 7.2f, 19.6f, 2.2f) }
+        fill { roundRect(16.8f, 12.8f, 21.6f, 19.6f, 2.2f) }
+    }
+
     val Speaker = icon("Speaker") {
         fill {
             moveTo(11.2f, 4.7f)
@@ -552,6 +583,31 @@ object IqIcons {
 
     /* -- settings & trust ---------------------------------------------------- */
 
+    /**
+     * A five-pointed star, drawn once for the two that use it.
+     *
+     * The points are on two circles - the tips on one, the inner corners on a
+     * smaller one - so the shape is regular rather than eyeballed, and the filled
+     * and outlined versions cannot drift apart.
+     */
+    private fun PathBuilder.star() {
+        moveTo(12f, 2.6f)
+        lineTo(14.9f, 8.5f)
+        lineTo(21.4f, 9.4f)
+        lineTo(16.7f, 14f)
+        lineTo(17.8f, 20.5f)
+        lineTo(12f, 17.4f)
+        lineTo(6.2f, 20.5f)
+        lineTo(7.3f, 14f)
+        lineTo(2.6f, 9.4f)
+        lineTo(9.1f, 8.5f)
+        close()
+    }
+
+    val Star = icon("Star") { fill { star() } }
+
+    val StarOutline = icon("StarOutline") { line { star() } }
+
     private fun PathBuilder.shield() {
         moveTo(12f, 2.2f)
         curveToRelative(-0.3f, 0f, -0.5f, 0.1f, -0.7f, 0.2f)
@@ -593,6 +649,44 @@ object IqIcons {
             moveTo(9.8f, 19.6f)
             curveTo(10.1f, 20.9f, 11f, 21.7f, 12f, 21.7f)
             curveTo(13f, 21.7f, 13.9f, 20.9f, 14.2f, 19.6f)
+        }
+    }
+
+    /** Pinned-to-top, for the chat list. A pushpin seen head-on. */
+    val Pin = icon("Pin") {
+        line {
+            moveTo(9f, 3.6f)
+            horizontalLineTo(15f)
+            moveTo(10.2f, 3.6f)
+            lineTo(9.6f, 10.2f)
+            moveTo(13.8f, 3.6f)
+            lineTo(14.4f, 10.2f)
+            moveTo(7.5f, 10.2f)
+            horizontalLineTo(16.5f)
+            moveTo(12f, 10.2f)
+            verticalLineTo(20.4f)
+        }
+    }
+
+    /** Muted: [Bell] with the family's slash across it. */
+    val BellOff = icon("BellOff") {
+        line {
+            moveTo(18.6f, 17.4f)
+            verticalLineTo(11f)
+            curveTo(18.6f, 7.6f, 16.3f, 5.1f, 13.2f, 4.5f)
+            verticalLineTo(3.7f)
+            arcToRelative(1.2f, 1.2f, 0f, false, false, -2.4f, 0f)
+            verticalLineTo(4.5f)
+            curveTo(7.7f, 5.1f, 5.4f, 7.6f, 5.4f, 11f)
+            verticalLineTo(17.4f)
+            lineTo(4f, 18.9f)
+            horizontalLineTo(20f)
+            close()
+            moveTo(9.8f, 19.6f)
+            curveTo(10.1f, 20.9f, 11f, 21.7f, 12f, 21.7f)
+            curveTo(13f, 21.7f, 13.9f, 20.9f, 14.2f, 19.6f)
+            moveTo(4.2f, 3.4f)
+            lineTo(20.2f, 20.6f)
         }
     }
 
@@ -645,6 +739,60 @@ object IqIcons {
             lineTo(7.4f, 19.8f)
             close()
             moveTo(14.4f, 6.4f); lineTo(17.6f, 9.6f)
+        }
+    }
+
+    /* -- message actions --------------------------------------------------- */
+
+    /**
+     * A curved arrow turning back on itself.
+     *
+     * The plain [ArrowBack] would do for navigation, but reply is not navigation —
+     * the hook says the message is being answered, not that a screen is closing.
+     */
+    val Reply = icon("Reply") {
+        line {
+            // Sat 0.9 low in the box when drawn from the baseline up, which shows
+            // once it is centred inside a circle, so the whole glyph is lifted.
+            moveTo(9.2f, 5.5f); lineTo(3.8f, 10.9f); lineTo(9.2f, 16.3f)
+            moveTo(3.8f, 10.9f)
+            horizontalLineTo(14.4f)
+            arcToRelative(5.8f, 5.8f, 0f, false, true, 5.8f, 5.8f)
+            verticalLineTo(18.5f)
+        }
+    }
+
+    /** Two offset sheets — one page laid over another. */
+    val Copy = icon("Copy") {
+        line {
+            roundRect(8.6f, 3.4f, 20.6f, 15.4f, 3.2f)
+            moveTo(15.4f, 18.8f)
+            arcToRelative(1.8f, 1.8f, 0f, false, true, -1.8f, 1.8f)
+            horizontalLineTo(5.2f)
+            arcToRelative(1.8f, 1.8f, 0f, false, true, -1.8f, -1.8f)
+            verticalLineTo(10.4f)
+            arcToRelative(1.8f, 1.8f, 0f, false, true, 1.8f, -1.8f)
+        }
+    }
+
+    /** A bin: lid, body, and two ribs so it reads at small sizes. */
+    val Trash = icon("Trash") {
+        line {
+            moveTo(3.8f, 6.8f); lineTo(20.2f, 6.8f)
+            moveTo(9.2f, 6.8f)
+            verticalLineTo(4.8f)
+            arcToRelative(1.4f, 1.4f, 0f, false, true, 1.4f, -1.4f)
+            horizontalLineTo(13.4f)
+            arcToRelative(1.4f, 1.4f, 0f, false, true, 1.4f, 1.4f)
+            verticalLineTo(6.8f)
+            moveTo(5.8f, 6.8f)
+            lineTo(6.7f, 19.2f)
+            arcToRelative(1.6f, 1.6f, 0f, false, false, 1.6f, 1.4f)
+            horizontalLineTo(15.7f)
+            arcToRelative(1.6f, 1.6f, 0f, false, false, 1.6f, -1.4f)
+            lineTo(18.2f, 6.8f)
+            moveTo(10.4f, 10.6f); lineTo(10.4f, 16.6f)
+            moveTo(13.6f, 10.6f); lineTo(13.6f, 16.6f)
         }
     }
 

@@ -59,6 +59,39 @@ class SessionStore(context: Context) {
             prefs.edit().putBoolean(KEY_CONTACTS, value).apply()
         }
 
+    /**
+     * Whether the system notification prompt has been put up before.
+     *
+     * Android keeps no "have I asked?" of its own, and the difference matters: a
+     * refusal the user has never seen a prompt for is not the same as one they have
+     * turned down twice, and only the second deserves to be sent to Settings.
+     */
+    var notificationsPrompted: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFICATIONS, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_NOTIFICATIONS, value).apply()
+        }
+
+    /**
+     * Whether this session has been offered the lock-screen call permission.
+     *
+     * Its own flag rather than sharing the notification one: they are two different
+     * permissions on two different screens, and somebody who allowed notifications
+     * has said nothing about whether a call may take over a locked phone.
+     */
+    var fullScreenCallsPrompted: Boolean
+        get() = prefs.getBoolean(KEY_FULL_SCREEN_CALLS, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_FULL_SCREEN_CALLS, value).apply()
+        }
+
+    /** Whether this session has been offered floating chat heads. */
+    var chatHeadsPrompted: Boolean
+        get() = prefs.getBoolean(KEY_CHAT_HEADS, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CHAT_HEADS, value).apply()
+        }
+
     fun save(user: AuthUser) {
         prefs.edit()
             .putString(KEY_TOKEN, user.token)
@@ -92,6 +125,9 @@ class SessionStore(context: Context) {
     private companion object {
         const val KEY_TOKEN = "token"
         const val KEY_CONTACTS = "contacts_prompted"
+        const val KEY_NOTIFICATIONS = "notifications_prompted"
+        const val KEY_FULL_SCREEN_CALLS = "full_screen_calls_prompted"
+        const val KEY_CHAT_HEADS = "chat_heads_prompted"
         const val KEY_UID = "uid"
         const val KEY_NAME = "fullname"
         const val KEY_PHONE = "phone"

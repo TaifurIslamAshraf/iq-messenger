@@ -42,9 +42,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.iqsocial.iq_message.data.SampleData
+import com.iqsocial.iq_message.data.Person
+import com.iqsocial.iq_message.data.call.CallCenter
+import com.iqsocial.iq_message.data.call.CallAudio
+import com.iqsocial.iq_message.data.call.CallEngine
+import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.ui.components.CallVideo
 import com.iqsocial.iq_message.ui.components.HumpedBarShape
+import com.iqsocial.iq_message.ui.components.KeepScreenOn
 import com.iqsocial.iq_message.ui.components.avatarBrush
+import com.iqsocial.iq_message.ui.components.rememberCameraToggle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -52,48 +59,88 @@ import com.iqsocial.iq_message.ui.theme.InkFaint
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 import kotlinx.coroutines.delay
-
 @Composable
 fun VideoCallScreen(
-    personId: String,
     onMinimize: () -> Unit,
     onEnd: () -> Unit
 ) {
     SystemBarIcons(darkIcons = false)
     val d = IqTheme.dimens
-    val person = remember(personId) { SampleData.person(personId) }
-    val me = SampleData.me
+    val call = CallCenter.call
+    val person = remember(call?.peer) { callerOf(call) }
+    val profile = MeRepository.profile
+    val toggleCamera = rememberCameraToggle()
+    val me = remember(profile) {
+        Person(
+            id = profile?.uid.orEmpty().ifBlank { "me" },
+            name = profile?.fullname.orEmpty().ifBlank { "You" },
+            handle = "",
+            photo = profile?.profilePicture.orEmpty()
+        )
+    }
 
-    var seconds by remember { mutableIntStateOf(18) }
-    var muted by remember { mutableStateOf(true) }
-    var speakerOn by remember { mutableStateOf(true) }
-    var videoOn by remember { mutableStateOf(true) }
-
-    LaunchedEffect(Unit) {
+    // From when it was answered, not from when this screen opened - see the audio
+    // screen for why those differ.
+    val standing = standingOf(
+        call,
+        joined = CallEngine.connected,
+        reconnecting = CallEngine.reconnecting,
+        poor = CallEngine.poorConnection
+    )
+    var seconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(call?.answeredAt) {
+        val from = call?.answeredAt ?: 0L
         while (true) {
+            seconds =
+                if (from > 0L) ((System.currentTimeMillis() - from) / 1000).toInt() else 0
             delay(1000)
-            seconds++
         }
     }
+
+    // A video call is watched without being touched, so the idle timeout has no
+    // idea anyone is there and dims the screen mid-conversation.
+    KeepScreenOn()
 
     Box(
         Modifier
             .fillMaxSize()
             .background(CallBlack)
     ) {
-        // Remote feed stand-in.
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(avatarBrush(person.seed))
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Black.copy(alpha = 0.55f),
-                        0.35f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.45f)
-                    )
+        // Their camera, full screen. Until a frame arrives - they have not joined,
+        // or have their camera off - the seeded gradient stands in, which is the same
+        // thing their avatar is drawn on and so reads as them rather than as a fault.
+        Box(Modifier.fillMaxSize().background(avatarBrush(person.seed))) {
+            val feeds = CallEngine.remoteFeeds
+            if (feeds.size > 1) {
+                // More than one other person, so there is no "their camera" to fill
+                // the screen with. Only one was ever drawn before - whichever the
+                // room listed first - and the rest were in the call unseen.
+                CallGrid(
+                    feeds = feeds,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(d.gapXs)
                 )
-        )
+            } else {
+                CallVideo(
+                    track = CallEngine.remoteVideo,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            // The scrim goes over whichever of the two is showing, so the controls
+            // and the name stay readable against a bright picture.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = 0.55f),
+                            0.35f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.45f)
+                        )
+                    )
+            )
+        }
 
         Column(
             Modifier
@@ -130,27 +177,49 @@ fun VideoCallScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        // The duration once there is one, and what the call is
+                        // doing until then. A header reading 0:00 over a phone that
+                        // is still ringing is the screen answering a question it has
+                        // not been asked and not answering the one it has.
                         Text(
-                            formatDuration(seconds),
+                            if (seconds > 0) formatDuration(seconds) else standing.label,
                             style = MaterialTheme.typography.titleMedium,
                             color = Color.White.copy(alpha = 0.9f),
                             fontWeight = FontWeight.Normal,
                             maxLines = 1
                         )
-                        Spacer(Modifier.height(d.gapXs))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                IqIcons.Shield, null,
-                                Modifier.size(d.iconXs), tint = Color.White.copy(alpha = 0.75f)
-                            )
-                            Spacer(Modifier.width(d.gapXs))
-                            Text(
-                                "End-to-end encrypted",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.78f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        // Shown only when the call actually is one.
+                        //
+                        // This line was unconditional, and it was the app's most
+                        // serious untruth: no call this build places is encrypted
+                        // end to end - `/v1/keys` is never called, this install has
+                        // no key pair, and nothing is handed to LiveKit's encryption
+                        // - so every call carried a shield telling the person it was
+                        // private while the media went through the server in the
+                        // clear. Privacy is the one claim an app must not make ahead
+                        // of itself.
+                        //
+                        // `e2ee` is the server's own word for it, parsed since the
+                        // call models were written and never once read. It is false
+                        // until the key exchange exists, which is exactly when this
+                        // should start appearing by itself.
+                        if (call?.e2ee == true) {
+                            Spacer(Modifier.height(d.gapXs))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    IqIcons.Shield, null,
+                                    Modifier.size(d.iconXs),
+                                    tint = Color.White.copy(alpha = 0.75f)
+                                )
+                                Spacer(Modifier.width(d.gapXs))
+                                Text(
+                                    "End-to-end encrypted",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White.copy(alpha = 0.78f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.width(d.gapSm))
@@ -161,17 +230,25 @@ fun VideoCallScreen(
                             .clip(RoundedCornerShape(d.radiusLg))
                             .background(avatarBrush(me.seed))
                     ) {
+                        // Mirrored, because this is the one picture that behaves like
+                        // a mirror: you move left and the reflection moves left.
+                        CallVideo(
+                            track = CallEngine.localVideo,
+                            modifier = Modifier.fillMaxSize(),
+                            mirror = true
+                        )
                         Box(
                             Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = d.gapMd)
                                 .size(d.scaled(38))
                                 .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.45f)),
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .clickable { CallEngine.flipCamera() },
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                IqIcons.CameraOutline, "Switch view",
+                                IqIcons.FlipCamera, "Switch camera",
                                 Modifier.size(d.iconSm), tint = Color.White
                             )
                         }
@@ -210,17 +287,17 @@ fun VideoCallScreen(
                 verticalAlignment = Alignment.Top
             ) {
                 VideoControl(
-                    icon = if (muted) IqIcons.MicOff else IqIcons.Mic,
+                    icon = if (!CallEngine.micOn) IqIcons.MicOff else IqIcons.Mic,
                     label = "Mute",
-                    enabled = !muted,
-                    onClick = { muted = !muted },
+                    enabled = CallEngine.micOn,
+                    onClick = { CallEngine.toggleMic() },
                     modifier = Modifier.weight(1f)
                 )
                 VideoControl(
-                    icon = IqIcons.Speaker,
+                    icon = CallAudio.route.icon,
                     label = "Speaker",
-                    enabled = speakerOn,
-                    onClick = { speakerOn = !speakerOn },
+                    enabled = CallAudio.route != CallAudio.Route.EARPIECE,
+                    onClick = { CallEngine.cycleRoute() },
                     modifier = Modifier.weight(1f)
                 )
                 // Height matches the small buttons so it does not stretch the bar;
@@ -248,11 +325,16 @@ fun VideoCallScreen(
                         )
                     }
                 }
+                // Outline when the camera is off, the way Mute carries MicOff.
+                // `enabled` only dims the icon, so a greyed camera over an
+                // unchanged icon was the one state that read as "you cannot press
+                // this" - which was exactly what it was not.
                 VideoControl(
-                    icon = IqIcons.Videocam,
+                    icon = if (CallEngine.cameraOn) IqIcons.Videocam
+                    else IqIcons.VideocamOutline,
                     label = "Video",
-                    enabled = videoOn,
-                    onClick = { videoOn = !videoOn },
+                    enabled = CallEngine.cameraOn,
+                    onClick = toggleCamera,
                     modifier = Modifier.weight(1f)
                 )
                 VideoControl(
