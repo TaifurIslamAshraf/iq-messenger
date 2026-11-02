@@ -63,7 +63,7 @@ data class MessengerSettings(
 ) {
     companion object {
         fun from(json: JSONObject): MessengerSettings = MessengerSettings(
-            notificationPreview = NotificationPreview.from(json.optString("notification_preview")),
+            notificationPreview = NotificationPreview.from(json.string("notification_preview")),
             showActiveStatus = json.optBoolean("show_active_status", true)
         )
     }

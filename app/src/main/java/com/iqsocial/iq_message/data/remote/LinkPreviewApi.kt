@@ -27,11 +27,11 @@ data class LinkPreview(
 ) {
     companion object {
         fun from(json: JSONObject): LinkPreview = LinkPreview(
-            url = json.optString("url"),
-            title = json.optString("title"),
-            description = json.optString("description"),
-            siteName = json.optString("site_name"),
-            imageUrl = json.optString("image_url")
+            url = json.string("url"),
+            title = json.string("title"),
+            description = json.string("description"),
+            siteName = json.string("site_name"),
+            imageUrl = json.string("image_url")
                 .takeIf { it.isNotBlank() && it != "null" }
                 ?.let(::absolute)
         )
@@ -65,7 +65,7 @@ object LinkPreviewApi {
             MessengerConfig.BASE_URL
         )
         return (result as? ApiResult.Success)?.data
-            ?.takeIf { it.optString("url").isNotBlank() }
+            ?.takeIf { it.string("url").isNotBlank() }
             ?.let(LinkPreview::from)
     }
 

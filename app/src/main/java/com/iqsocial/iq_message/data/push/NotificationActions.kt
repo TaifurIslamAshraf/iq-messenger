@@ -8,8 +8,7 @@ import com.iqsocial.iq_message.MainActivity
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.chat.ChatRepository
-import com.iqsocial.iq_message.data.remote.ApiResult
-import com.iqsocial.iq_message.data.remote.MessagesApi
+import com.iqsocial.iq_message.data.chat.Outbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -68,7 +67,8 @@ class NotificationActions : BroadcastReceiver() {
         if (text.isBlank()) return
 
         val app = context.applicationContext
-        val token = SessionStore(app).token ?: return
+        // Signed out, there is nobody to send as and nothing to queue it against.
+        val me = SessionStore(app).load() ?: return
 
         // The line goes up straight away, so the shade answers the tap rather than
         // sitting still until the network does.
@@ -79,17 +79,22 @@ class NotificationActions : BroadcastReceiver() {
         val pending = goAsync()
         scope.launch {
             try {
-                val sent = MessagesApi.send(
-                    token = token,
+                // Queued, like a message typed in the app, and for a better reason:
+                // replying from the shade is what people do while walking out of a
+                // building, and before this the reply was simply lost if the network
+                // was not there at that second. The queue carries it instead - the
+                // thread will show it either way, because the store is the thread.
+                //
+                // Nothing is marked failed any more: the send has not failed, it has
+                // not been tried yet.
+                Outbox.send(
+                    context = app,
                     conversationId = conversationId,
                     clientId = UUID.randomUUID().toString(),
+                    senderUid = me.uid,
                     text = text
                 )
-                if (sent is ApiResult.Success) {
-                    ChatRepository.invalidate()
-                } else {
-                    MessageNotifications.markFailed(app, conversationId)
-                }
+                ChatRepository.invalidate()
             } finally {
                 pending.finish()
             }

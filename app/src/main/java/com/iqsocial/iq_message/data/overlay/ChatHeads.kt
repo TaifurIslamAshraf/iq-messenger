@@ -405,7 +405,6 @@ object ChatHeads {
     }
 
     private fun tearDown() {
-        Log.w(TAG, "tearDown: the heads row is coming down", Throwable("who called tearDown"))
         // The panel belongs to a head; with no heads left there is nothing holding
         // it open and nothing to press to put it away.
         ChatWindow.close()

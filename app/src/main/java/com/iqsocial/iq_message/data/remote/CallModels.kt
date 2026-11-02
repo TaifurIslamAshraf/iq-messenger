@@ -59,10 +59,10 @@ data class CallParticipant(
 
     companion object {
         fun from(json: JSONObject): CallParticipant = CallParticipant(
-            uid = json.optString("uid"),
-            state = json.optString("state"),
+            uid = json.string("uid"),
+            state = json.string("state"),
             person = json.optJSONObject("person")?.let(ChatPerson::from),
-            invitedBy = json.optString("invited_by"),
+            invitedBy = json.string("invited_by"),
             ringExpiresAt = json.optLong("ring_expires_at"),
             joinedAt = json.optLong("joined_at"),
             leftAt = json.optLong("left_at")
@@ -109,15 +109,15 @@ data class ChatCall(
 
     companion object {
         fun from(json: JSONObject): ChatCall = ChatCall(
-            id = json.optString("id"),
-            status = CallStatus.of(json.optString("status")),
-            endReason = CallEnd.of(json.optString("end_reason").takeIf { it.isNotBlank() }),
+            id = json.string("id"),
+            status = CallStatus.of(json.string("status")),
+            endReason = CallEnd.of(json.string("end_reason").takeIf { it.isNotBlank() }),
             answeredAt = json.optLong("answered_at"),
             endedAt = json.optLong("ended_at"),
-            mode = json.optString("mode"),
+            mode = json.string("mode"),
             participants = json.optJSONArray("participants").mapObjects(CallParticipant::from),
-            type = CallType.of(json.optString("type")),
-            direction = json.optString("direction"),
+            type = CallType.of(json.string("type")),
+            direction = json.string("direction"),
             peer = json.optJSONObject("peer")?.let(ChatPerson::from),
             ringExpiresAt = json.optLong("ring_expires_at"),
             createdAt = json.optLong("created_at"),
@@ -132,12 +132,12 @@ data class ChatCall(
          * what changed is sent. [merge] puts it back over the call already in hand.
          */
         fun stateFrom(json: JSONObject): ChatCall = ChatCall(
-            id = json.optString("id"),
-            status = CallStatus.of(json.optString("status")),
-            endReason = CallEnd.of(json.optString("end_reason").takeIf { it.isNotBlank() }),
+            id = json.string("id"),
+            status = CallStatus.of(json.string("status")),
+            endReason = CallEnd.of(json.string("end_reason").takeIf { it.isNotBlank() }),
             answeredAt = json.optLong("answered_at"),
             endedAt = json.optLong("ended_at"),
-            mode = json.optString("mode"),
+            mode = json.string("mode"),
             participants = json.optJSONArray("participants").mapObjects(CallParticipant::from),
             type = CallType.AUDIO,
             direction = "",
@@ -176,9 +176,9 @@ data class CallConnection(
 ) {
     companion object {
         fun from(json: JSONObject): CallConnection = CallConnection(
-            url = json.optString("url"),
-            room = json.optString("room"),
-            token = json.optString("token"),
+            url = json.string("url"),
+            room = json.string("room"),
+            token = json.string("token"),
             expiresAt = json.optLong("expires_at")
         )
     }
@@ -204,7 +204,7 @@ data class CallSession(
             return CallSession(
                 call = existing?.merge(state) ?: state,
                 connection = CallConnection.from(json.optJSONObject("livekit") ?: JSONObject()),
-                e2eeKey = json.optString("e2ee_key")
+                e2eeKey = json.string("e2ee_key")
             )
         }
     }
@@ -216,7 +216,7 @@ data class CallPage(val items: List<ChatCall>, val nextCursor: String?) {
     companion object {
         fun from(json: JSONObject): CallPage = CallPage(
             items = json.optJSONArray("items").mapObjects(ChatCall::from),
-            nextCursor = json.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
+            nextCursor = json.string("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         )
     }
 }

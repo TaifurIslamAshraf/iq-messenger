@@ -59,7 +59,7 @@ object PeopleApi {
         }
         return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
             SearchResult(
-                by = json.optString("by"),
+                by = json.string("by"),
                 items = json.optJSONArray("items").mapObjects(ChatPerson::from)
             )
         }
@@ -87,7 +87,7 @@ object PeopleApi {
         return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
             Suggestions(
                 items = json.optJSONArray("items").mapObjects(ChatPerson::from),
-                nextCursor = json.optString("next_cursor")
+                nextCursor = json.string("next_cursor")
                     .takeIf { it.isNotBlank() && it != "null" }
             )
         }

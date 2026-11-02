@@ -65,12 +65,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import android.content.Context
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -113,6 +116,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -126,6 +131,8 @@ import com.iqsocial.iq_message.data.CallNote
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.QuotedMessage
 import com.iqsocial.iq_message.data.auth.SessionStore
+import com.iqsocial.iq_message.data.chat.ChatMessages
+import com.iqsocial.iq_message.data.chat.Outbox
 import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.KnownPeople
 import com.iqsocial.iq_message.data.chat.OpenChat
@@ -148,8 +155,8 @@ import com.iqsocial.iq_message.data.push.MessageNotifications
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatConversation
 import com.iqsocial.iq_message.data.remote.ChatMessage
-import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.ConversationsApi
+import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.LinkPreview
 import com.iqsocial.iq_message.data.remote.LinkPreviewApi
 import com.iqsocial.iq_message.data.remote.MediaApi
@@ -195,7 +202,20 @@ fun ChatScreen(
     val myUid = remember { session.load()?.uid.orEmpty() }
 
     var remote by remember(conversationId) { mutableStateOf<ChatConversation?>(null) }
-    val thread = remember(conversationId) { mutableStateListOf<ChatMessage>() }
+    /**
+     * The thread, read from this phone's own store.
+     *
+     * Not a list the screen fills and keeps in step. Every write - a fetch, the
+     * socket, this phone sending - goes to the database, and the database says so
+     * here; the screen has no other way of hearing about a message, which is what
+     * makes it impossible for the two to disagree.
+     *
+     * It also means a chat opened once opens again with no connection: the first
+     * frame is drawn from what is stored, and the network catches it up afterwards
+     * rather than being waited for.
+     */
+    val thread by ChatMessages.thread(context, conversationId)
+        .collectAsState(initial = emptyList())
     var threadError by remember(conversationId) { mutableStateOf<String?>(null) }
 
     /**
@@ -352,6 +372,82 @@ fun ChatScreen(
     val listState = rememberLazyListState(cacheWindow = ThreadCacheWindow)
     val scope = rememberCoroutineScope()
 
+    /** A page of older messages is on its way. */
+    var loadingOlder by remember(conversationId) { mutableStateOf(false) }
+
+    /** There is nothing further back to ask for. */
+    var reachedBeginning by remember(conversationId) { mutableStateOf(false) }
+
+    /**
+     * Fetches the page before the oldest message held, as the top comes into view.
+     *
+     * Opening a conversation asks for the newest page and nothing else, so without
+     * this a thread longer than one page simply stopped: scrolling up reached the
+     * top of what had been fetched and stayed there. On a phone that had the app
+     * open for weeks it was easy to miss, because what had been fetched had
+     * accumulated - on a new install, every conversation began one page ago.
+     *
+     * The list is reversed, so the **last** row is the oldest message and the top of
+     * the screen. Asking while it is still a few rows away means the page is usually
+     * stored before the thumb reaches the end of what is held, and the scroll does
+     * not stop to wait.
+     */
+    LaunchedEffect(conversationId, token) {
+        snapshotFlow {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            // How much is held, when the end of it is in view, and -1 when it is
+            // not. Carrying the size rather than a plain "near the end" matters: a
+            // page that lands while the thumb is parked at the top changes this and
+            // asks for the next one, where a boolean would have stayed true, been
+            // discarded as unchanged, and stopped after a single page.
+            if (last >= shown.lastIndex - OLDER_WHEN_WITHIN) shown.size else -1
+        }
+            .distinctUntilChanged()
+            .filter { it >= 0 }
+            .collect {
+                val auth = token ?: return@collect
+                if (loadingOlder || reachedBeginning) return@collect
+
+                val oldest = ChatMessages.lowestSeq(context, conversationId)
+                // Nothing numbered is held yet, so there is no "before" to ask
+                // about. Not an answer about the beginning - the first page simply
+                // has not landed, and concluding anything here would stop this
+                // conversation from ever paging.
+                if (oldest <= 0) return@collect
+                if (oldest == 1) {
+                    reachedBeginning = true
+                    return@collect
+                }
+
+                loadingOlder = true
+                when (
+                    val page = MessagesApi.history(
+                        token = auth,
+                        conversationId = conversationId,
+                        beforeSeq = oldest
+                    )
+                ) {
+                    is ApiResult.Success -> {
+                        val older = page.data.items
+                        ChatMessages.store(context, older)
+                        // Nothing came back from before what was already held: this
+                        // is the start of the conversation. Checked by `seq` rather
+                        // than by the page being empty, because a server that
+                        // answers with the same page again would otherwise have this
+                        // asking for ever.
+                        if (older.none { it.seq in 1 until oldest }) reachedBeginning = true
+                    }
+
+                    // Deliberately not an error on screen. The thread is still there
+                    // and still readable; the only thing that failed is going further
+                    // back, and the next scroll tries again - which is also what
+                    // happens offline, where there is nothing to say but "not yet".
+                    is ApiResult.Failure -> Unit
+                }
+                loadingOlder = false
+            }
+    }
+
     LaunchedEffect(conversationId, token) {
         if (token.isNullOrBlank()) return@LaunchedEffect
         when (val c = ConversationsApi.get(token, conversationId)) {
@@ -364,16 +460,19 @@ fun ChatScreen(
             is ApiResult.Failure -> threadError = c.message
         }
         when (val page = MessagesApi.history(token, conversationId)) {
-            is ApiResult.Success -> {
-                // History arrives newest first; the list reads oldest at the top.
-                thread.clear()
-                thread.addAll(page.data.items.reversed())
-            }
+            // Written, not assigned. Nothing is cleared first: the store is keyed by
+            // client id, so a page lands on top of what is already there and the
+            // messages this phone is still sending keep their place.
+            is ApiResult.Success -> ChatMessages.store(context, page.data.items)
+            // The thread is already on screen from the store, so a failed refresh
+            // costs the newest messages and not the conversation.
             is ApiResult.Failure -> threadError = page.message
         }
-        // Report how far this device has read, so the peer's ticks turn blue.
+        // Report how far this device has read, so the peer's ticks turn blue. Queued
+        // rather than sent: a thread read with no signal has still been read, and the
+        // receipt is owed to the other person whenever the phone can pay it.
         thread.lastOrNull()?.seq?.takeIf { it > 0 }?.let {
-            ConversationsApi.markRead(token, conversationId, it)
+            Outbox.read(context, conversationId, it)
         }
 
         // Catch up on changes to messages already in the page. Edits, deletions
@@ -386,8 +485,7 @@ fun ChatScreen(
                 val changed = MessagesApi.changes(token, conversationId, since, cursor)
                 if (changed !is ApiResult.Success) break
                 changed.data.items.forEach { updated ->
-                    val at = thread.indexOfFirst { it.id == updated.id }
-                    if (at >= 0) thread[at] = updated
+                    ChatMessages.store(context, updated)
                 }
                 cursor = changed.data.nextCursor
                 if (cursor == null && changed.data.syncedAt > 0L) {
@@ -407,16 +505,18 @@ fun ChatScreen(
     LaunchedEffect(conversationId, ChatSocket.connected) {
         if (!ChatSocket.connected) return@LaunchedEffect
         val auth = token ?: return@LaunchedEffect
-        val lastSeq = thread.lastOrNull { it.seq > 0 }?.seq ?: return@LaunchedEffect
+        val lastSeq = ChatMessages.highestSeq(context, conversationId)
+            .takeIf { it > 0 } ?: return@LaunchedEffect
         when (val page = MessagesApi.since(auth, conversationId, lastSeq)) {
             is ApiResult.Success -> {
-                val known = thread.mapTo(HashSet()) { it.id }
-                val missed = page.data.items.filterNot { it.id in known }
-                if (missed.isNotEmpty()) {
-                    thread.addAll(missed)
+                // No need to work out which are new: writing them all is an upsert,
+                // and one that was already here is written over itself.
+                val caught = page.data.items
+                if (caught.isNotEmpty()) {
+                    ChatMessages.store(context, caught)
                     ChatRepository.invalidate()
-                    missed.maxOfOrNull { it.seq }?.takeIf { it > 0 }?.let {
-                        ConversationsApi.markRead(auth, conversationId, it)
+                    caught.maxOfOrNull { it.seq }?.takeIf { it > 0 }?.let {
+                        Outbox.read(context, conversationId, it)
                     }
                 }
             }
@@ -434,32 +534,30 @@ fun ChatScreen(
                         ChatRepository.invalidate()
                         return@collect
                     }
-                    // A message this device sent comes back over the socket too;
-                    // reconcile it rather than showing it twice.
-                    val mine = thread.indexOfFirst {
-                        it.clientId.isNotBlank() && it.clientId == m.clientId
-                    }
-                    if (mine >= 0) thread[mine] = m
-                    else if (thread.none { it.id == m.id }) thread += m
+                    // A message this device sent comes back over the socket too.
+                    // Reconciling it is no longer something to do: the row is keyed
+                    // by client id, so the server's copy lands on the optimistic one.
+                    ChatMessages.store(context, m)
 
                     ChatRepository.invalidate()
                     if (m.senderUid != myUid && m.seq > 0) {
                         // The socket is preferred, but it is exactly when it is
                         // down that a receipt would otherwise be lost - so the
                         // HTTP route covers that case rather than being skipped.
-                        val viaSocket = ChatSocket.reportDelivered(conversationId, m.seq)
-                        token?.let { auth ->
-                            if (!viaSocket) ConversationsApi.markDelivered(auth, conversationId, m.seq)
-                            ConversationsApi.markRead(auth, conversationId, m.seq)
+                        // The socket is the quick route and the queue is the one that
+                        // does not lose anything, so the queue is only asked when
+                        // the socket could not take it. Both receipts go the same
+                        // way now: "delivered" is not a claim about when it arrived,
+                        // it is the answer to whether it arrived at all, and that
+                        // stays true however late it is sent.
+                        if (!ChatSocket.reportDelivered(conversationId, m.seq)) {
+                            Outbox.delivered(context, conversationId, m.seq)
                         }
+                        Outbox.read(context, conversationId, m.seq)
                     }
                 }
 
-                is ChatSocket.Event.Updated -> {
-                    val m = event.message
-                    val at = thread.indexOfFirst { it.id == m.id }
-                    if (at >= 0) thread[at] = m
-                }
+                is ChatSocket.Event.Updated -> ChatMessages.store(context, event.message)
 
                 is ChatSocket.Event.ReceiptChanged -> {
                     if (event.receipt.conversationId == conversationId) {
@@ -470,16 +568,6 @@ fun ChatScreen(
                     }
                 }
             }
-        }
-    }
-
-    // An upload that finished while this screen was open: the queue has dropped the
-    // placeholder, so the real message has to take its place here. If the screen was
-    // closed instead, nothing is needed - reopening reads the history.
-    LaunchedEffect(conversationId) {
-        UploadQueue.sent.collect { message ->
-            if (message.conversationId != conversationId) return@collect
-            if (thread.none { it.id == message.id }) thread += message
         }
     }
 
@@ -652,55 +740,32 @@ fun ChatScreen(
         val authToken = token ?: return
         acting = null
         scope.launch {
-            // One reaction per member: sending the one already there removes it.
-            val mine = message.reactions.firstOrNull { it.uid == myUid }
-            val r = if (mine?.emoji == emoji) {
-                MessagesApi.removeReaction(authToken, message.id)
-            } else {
-                MessagesApi.react(authToken, message.id, emoji)
-            }
-            if (r is ApiResult.Failure) {
-                threadError = r.message
-            } else {
-                // Only once it is actually on the message. Sounding on the tap would
-                // be the app congratulating itself for the press.
-                if (mine?.emoji != emoji) Sounds.reaction(context)
-                refreshThread(authToken, conversationId, thread)
-            }
+            // One reaction per member, and whether this one adds or removes is
+            // decided by the stored message rather than by the copy this row was
+            // drawn from - the store is where the current answer lives.
+            //
+            // The sound goes with the local write, which is now the moment the
+            // reaction is real: it is on the message, on this phone, whether or not
+            // there is a network to tell anybody else about it.
+            if (Outbox.react(context, message, myUid, emoji)) Sounds.reaction(context)
         }
     }
 
     fun deleteMessage(message: ChatMessage, forEveryone: Boolean) {
-        val authToken = token ?: return
         acting = null
+        // Gone from the thread at once, because the store is the thread. Whether the
+        // server has been told yet is the queue's business, and a message deleted on
+        // a train does not come back when the carriage goes into a tunnel.
         scope.launch {
-            val r = if (forEveryone) {
-                MessagesApi.deleteForEveryone(authToken, conversationId, listOf(message.id))
-            } else {
-                MessagesApi.deleteForMe(authToken, conversationId, listOf(message.id))
-            }
-            when (r) {
-                is ApiResult.Failure -> threadError = r.message
-                else -> {
-                    if (forEveryone) refreshThread(authToken, conversationId, thread)
-                    else thread.removeAll { it.id == message.id }
-                    ChatRepository.invalidate()
-                }
-            }
+            Outbox.remove(context, message, forEveryone)
+            ChatRepository.invalidate()
         }
     }
 
     fun saveEdit(message: ChatMessage, text: String) {
-        val authToken = token ?: return
         scope.launch {
-            when (val r = MessagesApi.edit(authToken, message.id, text)) {
-                is ApiResult.Success -> {
-                    val at = thread.indexOfFirst { it.id == message.id }
-                    if (at >= 0) thread[at] = r.data
-                    ChatRepository.invalidate()
-                }
-                is ApiResult.Failure -> threadError = r.message
-            }
+            Outbox.edit(context, message, text)
+            ChatRepository.invalidate()
         }
     }
 
@@ -871,32 +936,25 @@ fun ChatScreen(
     }
 
     fun sendLive(text: String) {
-        val authToken = token
-        if (authToken.isNullOrBlank()) return
         val clientId = UUID.randomUUID().toString()
         val replyId = replyingTo?.id
         replyingTo = null
-        // Shown at once, reconciled by client_id when the server answers.
-        thread += ChatMessage.pending(conversationId, clientId, myUid, text)
         scope.launch {
-            when (
-                val r = MessagesApi.send(
-                    authToken, conversationId, clientId, text, replyToId = replyId
-                )
-            ) {
-                is ApiResult.Success -> {
-                    val at = thread.indexOfFirst { it.clientId == clientId }
-                    if (at >= 0) thread[at] = r.data else thread += r.data
-                    // The chat list must now show a conversation that may be new.
-                    ChatRepository.invalidate()
-                    Sounds.sent(context)
-                }
-                is ApiResult.Failure -> {
-                    val at = thread.indexOfFirst { it.clientId == clientId }
-                    if (at >= 0) thread[at] = thread[at].copy(pending = false, failed = true)
-                    threadError = r.message
-                }
-            }
+            // Written and queued in one go, and that is the whole send.
+            //
+            // No token is needed here and no failure is reported: whether this can
+            // reach the server right now is the queue's problem, not the composer's.
+            // The message is on screen either way, and it goes when it can - which
+            // is the difference between a send that failed and a send that is late.
+            Outbox.send(
+                context = context,
+                conversationId = conversationId,
+                clientId = clientId,
+                senderUid = myUid,
+                text = text,
+                replyToId = replyId
+            )
+            Sounds.sent(context)
         }
     }
 
@@ -1034,6 +1092,13 @@ fun ChatScreen(
                                     onOpenMedia = { viewing = message }
                                 )
                             }
+                        }
+
+                        // Declared last, which in a reversed list is the top - above
+                        // the oldest message held, where the page being fetched is
+                        // about to appear.
+                        if (loadingOlder) {
+                            item(key = "older", contentType = "older") { LoadingOlder() }
                         }
                     }
                 }
@@ -1398,7 +1463,12 @@ private fun ChatMessage.toBubble(
         "%d:%02d".format(total / 60, total % 60)
     } ?: "0:00",
     // What the server returned, or what this device measured when it recorded it.
-    waveform = media?.waveform.orEmpty().ifEmpty { VoiceWaveforms.of(id) },
+    // Both keys, because a recording is measured before it has a server id: it is
+    // filed under the client id, and that is the only name it has until the send
+    // comes back.
+    waveform = media?.waveform.orEmpty()
+        .ifEmpty { VoiceWaveforms.of(id) }
+        .ifEmpty { VoiceWaveforms.of(clientId) },
     link = linkPreview,
     createdAt = createdAt,
     mediaKind = media?.kind.takeIf { !isDeleted },
@@ -1448,14 +1518,13 @@ private fun EmptyThread(name: String, error: String?) {
  * one, so there is nothing to append - the page has to be read again.
  */
 private suspend fun refreshThread(
+    context: Context,
     token: String,
-    conversationId: String,
-    thread: MutableList<ChatMessage>
+    conversationId: String
 ) {
     val page = MessagesApi.history(token, conversationId)
     if (page is ApiResult.Success) {
-        thread.clear()
-        thread.addAll(page.data.items.reversed())
+        ChatMessages.store(context, page.data.items)
     }
 }
 
@@ -2211,7 +2280,14 @@ private class RowMarks {
 private fun UploadQueue.Outgoing.toBubble(): Message = Message(
     id = clientId,
     text = "",
-    time = if (failed) "not sent" else "sending",
+    // Three states, not two. "Waiting" is the one that was missing: an upload with
+    // no network to go over has not failed, and calling it "not sent" told somebody
+    // their photo was lost when it was simply early.
+    time = when {
+        failed -> "not sent"
+        waiting -> "waiting for a connection"
+        else -> "sending"
+    },
     fromMe = true,
     // A recording already carries its own shape and length, so the bubble is the
     // finished one from the first frame rather than a placeholder that is replaced.
@@ -2359,6 +2435,38 @@ private fun separatorBefore(messages: List<Message>, index: Int): String? {
 
 /** Messages closer together than this belong to the same stretch of talking. */
 private const val SEPARATOR_GAP_MS = 20 * 60 * 1000L
+
+/**
+ * How many rows short of the oldest one held the next page is asked for.
+ *
+ * Far enough that the request is usually answered before the thumb arrives, close
+ * enough that a conversation nobody scrolls back through costs nothing.
+ */
+private const val OLDER_WHEN_WITHIN = 5
+
+/**
+ * The thread reaching further back.
+ *
+ * Small and quiet on purpose: it sits at the top of a conversation somebody is
+ * scrolling through, and anything bigger would push the messages they are reading
+ * down the screen while they read them.
+ */
+@Composable
+private fun LoadingOlder() {
+    val d = IqTheme.dimens
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = d.gapLg),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(d.gapLg),
+            strokeWidth = 2.dp,
+            color = InkFaint
+        )
+    }
+}
 
 @Composable
 private fun TimeSeparator(label: String) {

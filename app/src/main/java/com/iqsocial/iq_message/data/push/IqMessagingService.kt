@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import com.iqsocial.iq_message.data.remote.string
 
 /**
  * What arrives from Firebase.
@@ -104,7 +105,7 @@ class IqMessagingService : FirebaseMessagingService() {
         val conversationId = intent.getStringExtra(EXTRA_PAYLOAD)
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
             ?.optJSONObject("message")
-            ?.optString("conversation_id")
+            ?.string("conversation_id")
         return !conversationId.isNullOrBlank()
     }
 
@@ -149,8 +150,8 @@ class IqMessagingService : FirebaseMessagingService() {
 
     private fun onMessage(session: SessionStore, payload: JSONObject) {
         val body = payload.optJSONObject("message") ?: return
-        val messageId = body.optString("id")
-        val conversationId = body.optString("conversation_id")
+        val messageId = body.string("id")
+        val conversationId = body.string("conversation_id")
 
         // Delivery is reported however it arrives. Every message push reaches this
         // method, the app running or not (see [handleIntent]), so this is also where
@@ -175,10 +176,10 @@ class IqMessagingService : FirebaseMessagingService() {
         // belongs next to the thing it guards, and nothing else.
         if (!SeenMessages.firstSight(messageId)) return
 
-        val preview = payload.optString("preview")
-        val text = body.optString("text")
+        val preview = payload.string("preview")
+        val text = body.string("text")
         val sender = payload.optJSONObject("sender")
-        val named = sender?.optString("fullname")?.takeIf { it.isNotBlank() }
+        val named = sender?.string("fullname")?.takeIf { it.isNotBlank() }
 
         // Waited for, not launched. With the app not running this push is the only
         // reason the process exists, and once this method returns Firebase stops the
@@ -206,7 +207,7 @@ class IqMessagingService : FirebaseMessagingService() {
             val who = named
                 ?: peer?.fullname?.takeIf { it.isNotBlank() }
                 ?: getString(R.string.app_name)
-            val faceUrl = sender?.optString("profile_picture")?.takeIf { it.isNotBlank() }
+            val faceUrl = sender?.string("profile_picture")?.takeIf { it.isNotBlank() }
                 ?: peer?.profilePicture.orEmpty()
             val waiting = payload.optJSONObject("unread")?.optInt("messages") ?: 0
 
@@ -222,7 +223,7 @@ class IqMessagingService : FirebaseMessagingService() {
                 // The server leaves out whatever the preview setting hides, so an
                 // empty text is not a missing one - it is the setting doing its job.
                 body = text.takeIf { it.isNotBlank() }
-                    ?: labelFor(body.optString("type"), preview),
+                    ?: labelFor(body.string("type"), preview),
                 avatarUrl = faceUrl,
                 unread = waiting
             )
@@ -257,7 +258,7 @@ class IqMessagingService : FirebaseMessagingService() {
                     applicationContext,
                     conversationId,
                     text.takeIf { it.isNotBlank() }
-                        ?: labelFor(body.optString("type"), preview)
+                        ?: labelFor(body.string("type"), preview)
                 )
             }
         }
@@ -279,13 +280,13 @@ class IqMessagingService : FirebaseMessagingService() {
     private suspend fun onMissedCall(payload: JSONObject) {
         val call = payload.optJSONObject("call") ?: return
         val peer = call.optJSONObject("peer")
-        val video = call.optString("type") == "video"
+        val video = call.string("type") == "video"
         MessageNotifications.showMissedCall(
             context = applicationContext,
-            callId = call.optString("id"),
-            who = peer?.optString("fullname")?.takeIf { it.isNotBlank() } ?: "Someone",
+            callId = call.string("id"),
+            who = peer?.string("fullname")?.takeIf { it.isNotBlank() } ?: "Someone",
             what = if (video) "Missed video call" else "Missed voice call",
-            avatarUrl = peer?.optString("profile_picture").orEmpty()
+            avatarUrl = peer?.string("profile_picture").orEmpty()
         )
     }
 

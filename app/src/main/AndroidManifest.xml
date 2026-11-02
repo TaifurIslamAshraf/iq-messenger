@@ -4,6 +4,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+        To notice the moment a connection comes back, so a message written in a
+        tunnel goes as the train leaves it. Granted at install; it reads whether
+        there is a network, never what goes over one.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Asked for at runtime after sign-in; the app works without it. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 

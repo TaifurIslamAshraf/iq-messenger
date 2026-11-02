@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.data.chat
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -60,19 +61,62 @@ object ChatRepository {
         if (loading || (loaded && !force)) return
 
         loading = true
-        when (val result = ConversationsApi.list(token, folder)) {
-            is ApiResult.Success -> {
-                conversations = result.data.items
-                // Every list carries the peers with it, so this is where the names
-                // come from for free - whichever way a chat is opened later.
-                conversations.forEach { c -> c.peer?.let { KnownPeople.remember(c.id, it) } }
-                nextCursor = result.data.nextCursor
-                error = null
+        // Released whatever happens, cancellation included. Without this, a screen
+        // that goes away mid-fetch leaves the flag set, and `loading` is also what
+        // this function returns early on - so one cancelled load would stop the list
+        // from ever being fetched again, and leave a spinner turning over it.
+        try {
+            when (val result = ConversationsApi.list(token, folder)) {
+                is ApiResult.Success -> {
+                    conversations = result.data.items
+                    // Every list carries the peers with it, so this is where the names
+                    // come from for free - whichever way a chat is opened later.
+                    conversations.forEach { c -> c.peer?.let { KnownPeople.remember(c.id, it) } }
+                    // And kept, so the next launch has a list before it has a network.
+                    // Only the inbox: the folders are views of the same conversations,
+                    // and storing an archived page would file them all as archived.
+                    if (folder == ConversationsApi.Folder.INBOX) {
+                        store?.let { ChatList.store(it, result.data.items) }
+                    }
+                    nextCursor = result.data.nextCursor
+                    error = null
+                }
+                is ApiResult.Failure -> error = result.message
             }
-            is ApiResult.Failure -> error = result.message
+            loaded = true
+        } finally {
+            loading = false
         }
-        loading = false
-        loaded = true
+    }
+
+    /**
+     * Where the stored list lives, once somebody has said.
+     *
+     * A context, kept rather than passed: this object is reached from screens,
+     * from the socket listener and from the push, and threading one through every
+     * one of those to save a field would be the field in a worse place.
+     */
+    private var store: Context? = null
+
+    /**
+     * Shows what is stored, at once, and asks the server afterwards.
+     *
+     * The order is the point. A list drawn from the store appears with no network
+     * at all; the fetch that follows corrects it. Before this, an app opened on a
+     * train showed an empty screen and a spinner for as long as the tunnel lasted.
+     */
+    suspend fun open(context: Context, token: String?) {
+        store = context.applicationContext
+        if (conversations.isEmpty()) {
+            val held = ChatList.stored(context)
+            // Shown, but **not** marked loaded. `loaded` says the server has been
+            // asked, and the chat list screen uses it as an effect key - so setting
+            // it here restarted the very effect this is running inside, cancelling
+            // the fetch below before it could finish. The stored list appearing is
+            // not an answer from anybody; it is what there is until one arrives.
+            if (held.isNotEmpty()) conversations = held
+        }
+        load(token, force = true)
     }
 
     /** Appends the next page; a no-op once the server stops sending a cursor. */
@@ -81,19 +125,24 @@ object ChatRepository {
         if (token.isNullOrBlank() || loading) return
 
         loading = true
-        when (val result = ConversationsApi.list(token, cursor = cursor)) {
-            is ApiResult.Success -> {
-                // Guard against a server that repeats a page: ids must stay unique
-                // or LazyColumn's keys collide.
-                val known = conversations.mapTo(HashSet()) { it.id }
-                conversations = conversations + result.data.items.filterNot { it.id in known }
-                result.data.items.forEach { c -> c.peer?.let { KnownPeople.remember(c.id, it) } }
-                nextCursor = result.data.nextCursor
-                error = null
+        // Released on cancellation too, for the reason given in [load]: this flag
+        // guards both functions, so one abandoned page would jam the whole list.
+        try {
+            when (val result = ConversationsApi.list(token, cursor = cursor)) {
+                is ApiResult.Success -> {
+                    // Guard against a server that repeats a page: ids must stay unique
+                    // or LazyColumn's keys collide.
+                    val known = conversations.mapTo(HashSet()) { it.id }
+                    conversations = conversations + result.data.items.filterNot { it.id in known }
+                    result.data.items.forEach { c -> c.peer?.let { KnownPeople.remember(c.id, it) } }
+                    nextCursor = result.data.nextCursor
+                    error = null
+                }
+                is ApiResult.Failure -> error = result.message
             }
-            is ApiResult.Failure -> error = result.message
+        } finally {
+            loading = false
         }
-        loading = false
     }
 
     /**
@@ -147,11 +196,22 @@ object ChatRepository {
             else ConversationsApi.unarchive(it, id)
         }
 
-    suspend fun setUnread(token: String?, id: String, unread: Boolean): String? =
-        act(token) {
-            if (unread) ConversationsApi.markUnread(it, id)
-            else ConversationsApi.markRead(it, id)
-        }
+    /**
+     * The chat list's own read/unread toggle, queued.
+     *
+     * Through the outbox rather than straight at the server, because this is a
+     * decision and not a question: somebody tapped "mark unread" to find the
+     * conversation again later, and losing that because the train went underground
+     * would be the app forgetting something it was told. The badge changes here
+     * either way - the local store is what the list draws.
+     */
+    suspend fun setUnread(token: String?, id: String, unread: Boolean): String? {
+        if (token.isNullOrBlank()) return "Not signed in"
+        val context = store ?: return "Not ready"
+        if (unread) Outbox.markUnread(context, id) else Outbox.markRead(context, id)
+        invalidate()
+        return null
+    }
 
     suspend fun delete(token: String?, id: String): String? =
         act(token) { ConversationsApi.deleteForMe(it, id) }

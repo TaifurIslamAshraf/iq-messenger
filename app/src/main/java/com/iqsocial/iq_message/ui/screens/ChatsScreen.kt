@@ -110,7 +110,10 @@ fun ChatsScreen(
     // marks the list stale, this effect runs again, and `load` fetches - without
     // it the flag flipped and nothing ever asked.
     LaunchedEffect(token, refresh, ChatRepository.loaded) {
-        ChatRepository.load(token, force = refresh)
+        // Stored first, server second. The list that was kept is on screen before
+        // the request is made, so opening the app with no connection shows the
+        // conversations rather than a spinner over nothing.
+        ChatRepository.open(context, token)
         ChatRepository.refreshUnread(token)
     }
 

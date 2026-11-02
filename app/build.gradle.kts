@@ -5,6 +5,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     // Reads app/google-services.json and generates the Firebase config resources.
     alias(libs.plugins.google.services)
+    // Generates the Room DAOs. The only code generator in the project, and it earns
+    // its place: the alternative is hand-written SQL for every read and write.
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -127,6 +130,10 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.livekit.android)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

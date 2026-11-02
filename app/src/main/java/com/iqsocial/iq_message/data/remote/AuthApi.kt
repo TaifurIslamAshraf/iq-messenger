@@ -18,12 +18,12 @@ data class AuthUser(
 ) {
     companion object {
         fun from(json: JSONObject): AuthUser = AuthUser(
-            uid = json.optString("uid"),
-            fullname = json.optString("fullname"),
-            phone = json.optString("phone_number"),
-            profilePicture = json.optString("profile_picture"),
-            refCode = json.optString("ref_code"),
-            token = json.optString("token")
+            uid = json.string("uid"),
+            fullname = json.string("fullname"),
+            phone = json.string("phone_number"),
+            profilePicture = json.string("profile_picture"),
+            refCode = json.string("ref_code"),
+            token = json.string("token")
         )
     }
 }

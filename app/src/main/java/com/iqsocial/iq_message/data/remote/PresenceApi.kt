@@ -24,7 +24,7 @@ data class Presence(
 ) {
     companion object {
         fun from(json: JSONObject): Presence = Presence(
-            uid = json.optString("uid"),
+            uid = json.string("uid"),
             online = json.optBoolean("online"),
             lastSeenAt = json.optLong("last_seen_at")
         )

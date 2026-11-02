@@ -22,8 +22,8 @@ data class DeviceKey(
 ) {
     companion object {
         fun from(json: JSONObject): DeviceKey = DeviceKey(
-            deviceId = json.optString("device_id"),
-            publicKey = json.optString("public_key"),
+            deviceId = json.string("device_id"),
+            publicKey = json.string("public_key"),
             updatedAt = json.optLong("updated_at")
         )
     }
@@ -89,7 +89,7 @@ object KeysApi {
         return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
             json.optJSONArray("users").mapObjects { person ->
                 PersonKeys(
-                    uid = person.optString("uid"),
+                    uid = person.string("uid"),
                     keys = person.optJSONArray("keys").mapObjects(DeviceKey::from)
                 )
             }

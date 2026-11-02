@@ -26,11 +26,11 @@ data class ChatPerson(
 
     companion object {
         fun from(json: JSONObject): ChatPerson = ChatPerson(
-            uid = json.optString("uid"),
-            fullname = json.optString("fullname").trim(),
-            profilePicture = json.optString("profile_picture"),
+            uid = json.string("uid"),
+            fullname = json.string("fullname").trim(),
+            profilePicture = json.string("profile_picture"),
             verified = json.optInt("verified"),
-            badgeKey = json.optString("badge_key")
+            badgeKey = json.string("badge_key")
         )
     }
 }
@@ -53,11 +53,11 @@ data class LastMessage(
 
     companion object {
         fun from(json: JSONObject): LastMessage = LastMessage(
-            id = json.optString("id"),
+            id = json.string("id"),
             seq = json.optInt("seq"),
-            senderUid = json.optString("sender_uid"),
-            type = json.optString("type"),
-            text = json.optString("text"),
+            senderUid = json.string("sender_uid"),
+            type = json.string("type"),
+            text = json.string("text"),
             deletedAt = json.optLong("deleted_at"),
             createdAt = json.optLong("created_at")
         )
@@ -85,15 +85,20 @@ data class ChatConversation(
     val muted: Boolean,
     /** When a timed mute ends; 0 when not muted, or muted for good. */
     val mutedUntil: Long,
-    val createdAt: Long
+    val createdAt: Long,
+    /**
+     * The row as the API sends it, kept so the stored copy and the received copy
+     * are the same thing - read back by this same parser rather than a second one.
+     */
+    val raw: String = ""
 ) {
     /** A conversation reads as unread either by count or because it was marked so. */
     val showsUnread: Boolean get() = unreadCount > 0 || markedUnread
 
     companion object {
         fun from(json: JSONObject): ChatConversation = ChatConversation(
-            id = json.optString("id"),
-            type = json.optString("type"),
+            id = json.string("id"),
+            type = json.string("type"),
             peer = json.optJSONObject("peer")?.let(ChatPerson::from),
             lastMessage = json.optJSONObject("last_message")?.let(LastMessage::from),
             lastMessageAt = json.optLong("last_message_at"),
@@ -105,7 +110,8 @@ data class ChatConversation(
             archived = json.optBoolean("archived"),
             muted = json.optBoolean("muted"),
             mutedUntil = json.optLong("muted_until"),
-            createdAt = json.optLong("created_at")
+            createdAt = json.optLong("created_at"),
+            raw = json.toString()
         )
     }
 }
@@ -119,7 +125,7 @@ data class ConversationPage(
     companion object {
         fun from(json: JSONObject): ConversationPage = ConversationPage(
             items = json.optJSONArray("items").mapObjects(ChatConversation::from),
-            nextCursor = json.optString("next_cursor").takeIf {
+            nextCursor = json.string("next_cursor").takeIf {
                 it.isNotBlank() && it != "null"
             }
         )
@@ -143,11 +149,11 @@ data class Quote(
 ) {
     companion object {
         fun from(json: JSONObject): Quote = Quote(
-            id = json.optString("id"),
+            id = json.string("id"),
             seq = json.optInt("seq"),
-            senderUid = json.optString("sender_uid"),
-            type = json.optString("type"),
-            text = json.optString("text"),
+            senderUid = json.string("sender_uid"),
+            type = json.string("type"),
+            text = json.string("text"),
             deletedAt = json.optLong("deleted_at")
         )
     }
@@ -158,8 +164,8 @@ data class Quote(
 data class Reaction(val uid: String, val emoji: String, val createdAt: Long) {
     companion object {
         fun from(json: JSONObject): Reaction = Reaction(
-            uid = json.optString("uid"),
-            emoji = json.optString("emoji"),
+            uid = json.string("uid"),
+            emoji = json.string("emoji"),
             createdAt = json.optLong("created_at")
         )
     }
@@ -187,19 +193,19 @@ data class MessageMedia(
         fun from(json: JSONObject): MessageMedia {
             val bars = json.optJSONArray("waveform")
             return MessageMedia(
-                id = json.optString("id"),
-                kind = json.optString("kind"),
-                mimeType = json.optString("mime_type"),
+                id = json.string("id"),
+                kind = json.string("kind"),
+                mimeType = json.string("mime_type"),
                 size = json.optLong("size"),
-                fileName = json.optString("file_name"),
+                fileName = json.string("file_name"),
                 width = json.optInt("width"),
                 height = json.optInt("height"),
                 durationMs = json.optLong("duration_ms"),
-                placeholder = json.optString("placeholder"),
+                placeholder = json.string("placeholder"),
                 waveform = if (bars == null) emptyList()
                 else (0 until bars.length()).map { bars.optInt(it) },
-                url = json.optString("url"),
-                thumbnailUrl = json.optString("thumbnail_url")
+                url = json.string("url"),
+                thumbnailUrl = json.string("thumbnail_url")
             )
         }
     }
@@ -248,9 +254,9 @@ data class MessageCall(
 
     companion object {
         fun from(json: JSONObject): MessageCall = MessageCall(
-            id = json.optString("id"),
-            video = json.optString("type") == "video",
-            endReason = CallEnd.of(json.optString("end_reason").takeIf { it.isNotBlank() }),
+            id = json.string("id"),
+            video = json.string("type") == "video",
+            endReason = CallEnd.of(json.string("end_reason").takeIf { it.isNotBlank() }),
             missed = json.optBoolean("missed"),
             answeredAt = json.optLong("answered_at"),
             endedAt = json.optLong("ended_at"),
@@ -311,20 +317,32 @@ data class ChatMessage(
     /** Local only: set when this app created the message and is waiting on the server. */
     val pending: Boolean = false,
     /** Local only: the send failed and can be retried. */
-    val failed: Boolean = false
+    val failed: Boolean = false,
+    /**
+     * The JSON this was parsed from, kept so it can be stored and parsed again.
+     *
+     * The nested halves of a message - a quote, a media object, reactions, a link
+     * preview - have no columns of their own in the local store, and giving them
+     * some would mean a second serialiser drifting away from this parser. Keeping
+     * what arrived means the stored message and the received message are the same
+     * thing, read by the same code.
+     *
+     * Blank for a message this app made itself, which has nothing nested in it.
+     */
+    val raw: String = ""
 ) {
     val isDeleted: Boolean get() = deletedAt > 0
     val isEdited: Boolean get() = editedAt > 0
 
     companion object {
         fun from(json: JSONObject): ChatMessage = ChatMessage(
-            id = json.optString("id"),
-            conversationId = json.optString("conversation_id"),
+            id = json.string("id"),
+            conversationId = json.string("conversation_id"),
             seq = json.optInt("seq"),
-            senderUid = json.optString("sender_uid"),
-            clientId = json.optString("client_id"),
-            type = json.optString("type"),
-            text = json.optString("text"),
+            senderUid = json.string("sender_uid"),
+            clientId = json.string("client_id"),
+            type = json.string("type"),
+            text = json.string("text"),
             replyTo = json.optJSONObject("reply_to")?.let(Quote::from),
             forwarded = json.optBoolean("forwarded"),
             reactions = json.optJSONArray("reactions").mapObjects(Reaction::from),
@@ -334,7 +352,8 @@ data class ChatMessage(
             editedAt = json.optLong("edited_at"),
             deletedAt = json.optLong("deleted_at"),
             createdAt = json.optLong("created_at"),
-            updatedAt = json.optLong("updated_at")
+            updatedAt = json.optLong("updated_at"),
+            raw = json.toString()
         )
 
         /** The optimistic copy shown the instant Send is tapped. */
@@ -394,7 +413,7 @@ data class MessageChanges(
     companion object {
         fun from(json: JSONObject): MessageChanges = MessageChanges(
             items = json.optJSONArray("items").mapObjects(ChatMessage::from),
-            nextCursor = json.optString("next_cursor")
+            nextCursor = json.string("next_cursor")
                 .takeIf { it.isNotBlank() && it != "null" },
             syncedAt = json.optLong("synced_at")
         )
@@ -406,7 +425,7 @@ data class MessageChanges(
 data class MessageRecipient(val uid: String, val deliveredAt: Long, val readAt: Long) {
     companion object {
         fun from(json: JSONObject): MessageRecipient = MessageRecipient(
-            uid = json.optString("uid"),
+            uid = json.string("uid"),
             deliveredAt = json.optLong("delivered_at"),
             readAt = json.optLong("read_at")
         )
@@ -440,7 +459,7 @@ data class MessageSearchResult(val items: List<MessageHit>, val nextCursor: Stri
     companion object {
         fun from(json: JSONObject): MessageSearchResult = MessageSearchResult(
             items = json.optJSONArray("items").mapObjects(MessageHit::from),
-            nextCursor = json.optString("next_cursor")
+            nextCursor = json.string("next_cursor")
                 .takeIf { it.isNotBlank() && it != "null" }
         )
     }
@@ -454,7 +473,7 @@ data class DeletedForMe(val messageIds: List<String>) {
             val ids = json.optJSONArray("message_ids")
             return DeletedForMe(
                 if (ids == null) emptyList()
-                else (0 until ids.length()).mapNotNull { ids.optString(it).takeIf(String::isNotBlank) }
+                else (0 until ids.length()).mapNotNull { ids.string(it).takeIf(String::isNotBlank) }
             )
         }
     }

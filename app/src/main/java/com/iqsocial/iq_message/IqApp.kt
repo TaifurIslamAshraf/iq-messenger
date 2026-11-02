@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.call.CallAudio
@@ -43,10 +45,15 @@ import com.iqsocial.iq_message.data.call.CallEngine
 import com.iqsocial.iq_message.data.call.CallService
 import com.iqsocial.iq_message.data.call.CallWindow
 import com.iqsocial.iq_message.data.call.RingingNotification
+import com.iqsocial.iq_message.data.chat.ChatMessages
+import com.iqsocial.iq_message.data.chat.Outbox
+import com.iqsocial.iq_message.data.chat.OutboxWork
 import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.KnownPeople
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
 import com.iqsocial.iq_message.data.media.MediaCache
+import com.iqsocial.iq_message.data.media.UploadQueue
+import com.iqsocial.iq_message.data.net.Reachability
 import com.iqsocial.iq_message.data.media.VoiceWaveforms
 import com.iqsocial.iq_message.data.overlay.ChatHeads
 import com.iqsocial.iq_message.data.profile.MeRepository
@@ -85,6 +92,7 @@ import com.iqsocial.iq_message.ui.screens.VideoCallScreen
 import com.iqsocial.iq_message.ui.screens.WaitingCallBar
 import com.iqsocial.iq_message.ui.screens.rememberAuthRepository
 import com.iqsocial.iq_message.ui.theme.CallBlack
+import kotlinx.coroutines.launch
 /**
  * Destinations in the prototype.
  *
@@ -193,6 +201,7 @@ fun IqApp(
     // Realtime is a property of being signed in, not of any one screen, so it is
     // opened here and torn down on log-out.
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val session = remember { SessionStore(context) }
     // Photos survive eviction from memory here, so scrolling back to one does not
     // fetch it again.
@@ -269,6 +278,48 @@ fun IqApp(
             else -> nav.push(wanted)
         }
     }
+    /**
+     * Anything this phone decided while it could not reach the server.
+     *
+     * Tried when the app starts and again whenever the socket comes back, because
+     * those are the two moments the answer to "can we reach it now" changes. A
+     * message interrupted mid-send is put back in the queue first - the send died
+     * with the process, and nothing else is ever going to finish it.
+     */
+    LaunchedEffect(session.token, ChatSocket.connected) {
+        val auth = session.token ?: return@LaunchedEffect
+        if (auth.isBlank()) return@LaunchedEffect
+        ChatMessages.recoverInterrupted(context)
+        Outbox.drain(context)
+        // Files are their own queue, because what has to be kept for them is bytes
+        // rather than a decision - but they are picked up at the same two moments.
+        UploadQueue.resume(context, auth)
+    }
+
+    /**
+     * The network itself, asked directly.
+     *
+     * Beside the effect above rather than instead of it, because the two answer
+     * different questions and each catches what the other misses: the socket coming
+     * back means the server is reachable, and this means the phone is. A handover
+     * from Wi-Fi to mobile is noticed here at once and by the socket twenty seconds
+     * later; a server that went down and came up is noticed by the socket and not
+     * here at all.
+     *
+     * Registered against the application, so it keeps watching while no screen is
+     * looking - which is most of when it matters.
+     */
+    DisposableEffect(Unit) {
+        Reachability.start(context) {
+            val auth = SessionStore(context).token
+            if (!auth.isNullOrBlank()) {
+                Outbox.drain(context)
+                UploadQueue.resume(context, auth)
+            }
+        }
+        onDispose { }
+    }
+
     LaunchedEffect(session.token) {
         session.token?.let(ChatSocket::connect)
         // Started with the socket because it listens to the socket, and torn down
@@ -330,13 +381,29 @@ fun IqApp(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    /**
+     * Whether this screen is actually in front of somebody.
+     *
+     * The prompts below are dialogs, and a dialog has to attach to the activity's
+     * window. Launched behind the lock screen - which is what tapping a notification
+     * on a locked phone does - the activity exists but has no window to give, and
+     * putting one up there throws `BadTokenException` and takes the app down with
+     * it. That was seen once, on the first launch after an install.
+     *
+     * Waiting is the right answer regardless of the crash: a permission prompt shown
+     * behind a locked screen is one nobody is there to read, and it would be marked
+     * as asked.
+     */
+    val lifecycle by lifecycleOwner.lifecycle.currentStateAsState()
+    val inFront = lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+
     // Asked for after sign-in rather than at launch, where it would be the first
     // thing a stranger sees. Nothing depends on the answer.
-    if (auth.isSignedIn()) NotificationsGate()
+    if (auth.isSignedIn() && inFront) NotificationsGate()
     // After it, not beside it: notifications come first, and two permission
     // dialogs at once is a wall rather than a question.
-    if (auth.isSignedIn()) FullScreenCallsGate()
-    if (auth.isSignedIn()) ChatHeadsGate()
+    if (auth.isSignedIn() && inFront) FullScreenCallsGate()
+    if (auth.isSignedIn() && inFront) ChatHeadsGate()
 
 
     /**
@@ -550,6 +617,14 @@ fun IqApp(
                             // that account's business and nobody else's.
                             PresenceRepository.clear()
                             ChatRepository.clear()
+                            // And the copy on disk. Everything above empties memory;
+                            // this account's messages would otherwise still be here
+                            // for whoever signs in next.
+                            scope.launch { ChatMessages.wipe(context) }
+                            // The system is still holding a request to empty a queue
+                            // that is about to be emptied by other means, for an
+                            // account that will not be signed in when it runs.
+                            OutboxWork.cancel(context)
                             KnownPeople.clear()
                             ChatHeads.clear()
                             ChatSocket.disconnect()

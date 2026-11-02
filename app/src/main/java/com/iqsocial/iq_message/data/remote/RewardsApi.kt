@@ -64,9 +64,9 @@ data class RewardSlot(
 ) {
     companion object {
         fun from(json: JSONObject): RewardSlot = RewardSlot(
-            kind = SlotKind.from(json.optString("kind")),
+            kind = SlotKind.from(json.string("kind")),
             person = json.optJSONObject("person")?.let(ChatPerson::from),
-            status = SlotStatus.from(json.optString("status")),
+            status = SlotStatus.from(json.string("status")),
             talkMs = json.optLong("talk_ms"),
             targetMs = json.optLong("target_ms"),
             points = json.optInt("points"),
@@ -97,7 +97,7 @@ data class SpecialSlot(
     companion object {
         fun from(json: JSONObject): SpecialSlot = SpecialSlot(
             person = json.optJSONObject("person")?.let(ChatPerson::from),
-            status = SlotStatus.from(json.optString("status")),
+            status = SlotStatus.from(json.string("status")),
             talkMs = json.optLong("talk_ms"),
             targetMs = json.optLong("target_ms"),
             points = json.optInt("points"),
@@ -122,8 +122,8 @@ data class LiveTalk(
 ) {
     companion object {
         fun from(json: JSONObject): LiveTalk = LiveTalk(
-            callId = json.optString("call_id"),
-            peerUid = json.optString("peer_uid"),
+            callId = json.string("call_id"),
+            peerUid = json.string("peer_uid"),
             since = json.optLong("since")
         )
     }
@@ -150,7 +150,7 @@ data class RewardsToday(
         fun from(json: JSONObject): RewardsToday {
             val slots = json.optJSONObject("slots") ?: JSONObject()
             return RewardsToday(
-                day = json.optString("day"),
+                day = json.string("day"),
                 serverNow = json.optLong("server_now"),
                 dayStartsAt = json.optLong("day_starts_at"),
                 resetsAt = json.optLong("resets_at"),
@@ -176,7 +176,7 @@ data class SpecialChange(
 ) {
     companion object {
         fun from(json: JSONObject): SpecialChange = SpecialChange(
-            appliesFrom = AppliesFrom.from(json.optString("applies_from")),
+            appliesFrom = AppliesFrom.from(json.string("applies_from")),
             person = json.optJSONObject("person")?.let(ChatPerson::from)
         )
     }

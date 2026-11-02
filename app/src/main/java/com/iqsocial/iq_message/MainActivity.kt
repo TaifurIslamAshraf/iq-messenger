@@ -31,6 +31,7 @@ import com.iqsocial.iq_message.data.call.CallWindow
 import com.iqsocial.iq_message.data.push.IqMessagingService
 import com.iqsocial.iq_message.data.push.NotificationActions
 import com.iqsocial.iq_message.ui.theme.IQMessageTheme
+import com.iqsocial.iq_message.data.remote.string
 class MainActivity : ComponentActivity() {
 
     /**
@@ -47,7 +48,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         opened.value = conversationOf(intent)
         answerIfAsked(intent)
-        probeIfAsked(intent) // TEMPORARY PROBE
         // Transparent bars; each screen sets its own icon contrast via SystemBarIcons.
         val transparent = android.graphics.Color.TRANSPARENT
         enableEdgeToEdge(
@@ -112,42 +112,6 @@ class MainActivity : ComponentActivity() {
         if (CallWindow.inPip) CallWindow.inPip = false
     }
 
-    // TEMPORARY PROBE - remove after diagnosing the refused conversation notification.
-    private fun probeIfAsked(intent: Intent?) {
-        intent ?: return
-        // TEMPORARY: floats a head with no message behind it, so the window the head
-        // opens can be tried without waiting for somebody to write.
-        if (intent.getBooleanExtra("probe_head", false)) {
-            com.iqsocial.iq_message.data.overlay.ChatHeads.show(
-                applicationContext,
-                conversationId = "probe-head",
-                name = "Probe",
-                face = null
-            )
-            com.iqsocial.iq_message.data.overlay.ChatHeads.preview(
-                applicationContext,
-                "probe-head",
-                "Tomorrow at 5 works for me - shall I book the table?"
-            )
-        }
-        val app = applicationContext
-        if (intent.getBooleanExtra("probe_post", false)) {
-            Thread {
-                kotlinx.coroutines.runBlocking {
-                    com.iqsocial.iq_message.data.push.MessageNotifications.show(
-                        app, "probe-notification-test", "Probe Person", "Probe message"
-                    )
-                }
-            }.start()
-        }
-        if (intent.getBooleanExtra("probe_clean", false)) {
-            com.iqsocial.iq_message.data.push.MessageNotifications.clear(app, "probe-notification-test")
-            androidx.core.content.pm.ShortcutManagerCompat.removeDynamicShortcuts(
-                app, listOf("probe-notification-test")
-            )
-        }
-    }
-
     /**
      * Answers the call the notification's Answer button was for.
      *
@@ -178,7 +142,7 @@ class MainActivity : ComponentActivity() {
         return runCatching {
             org.json.JSONObject(payload)
                 .optJSONObject("message")
-                ?.optString("conversation_id")
+                ?.string("conversation_id")
                 ?.takeIf { it.isNotBlank() }
         }.getOrNull()
     }

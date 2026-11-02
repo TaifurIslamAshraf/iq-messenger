@@ -250,8 +250,8 @@ data class Receipt(
 ) {
     companion object {
         fun from(json: JSONObject): Receipt = Receipt(
-            conversationId = json.optString("conversation_id"),
-            uid = json.optString("uid"),
+            conversationId = json.string("conversation_id"),
+            uid = json.string("uid"),
             deliveredSeq = json.optInt("delivered_seq"),
             readSeq = json.optInt("read_seq")
         )

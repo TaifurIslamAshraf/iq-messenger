@@ -32,12 +32,12 @@ data class ContactMatch(
 ) {
     companion object {
         fun from(json: JSONObject): ContactMatch = ContactMatch(
-            uid = json.optString("uid"),
-            phone = json.optString("phone"),
-            fullname = json.optString("fullname"),
-            profilePicture = json.optString("profile_picture"),
+            uid = json.string("uid"),
+            phone = json.string("phone"),
+            fullname = json.string("fullname"),
+            profilePicture = json.string("profile_picture"),
             verified = json.optInt("verified"),
-            badgeKey = json.optString("badge_key")
+            badgeKey = json.string("badge_key")
         )
     }
 }
@@ -80,20 +80,20 @@ data class MessengerProfile(
         fun from(json: JSONObject): MessengerProfile {
             val privacy = json.optJSONObject("privacy_settings")
             return MessengerProfile(
-                uid = json.optString("uid"),
+                uid = json.string("uid"),
                 // Names come back with stray whitespace ("Mithun sarker "), which
                 // would show up against the verified tick beside it.
-                fullname = json.optString("fullname").trim(),
-                phoneNumber = json.optString("phone_number"),
-                bio = json.optString("bio"),
-                profilePicture = json.optString("profile_picture"),
+                fullname = json.string("fullname").trim(),
+                phoneNumber = json.string("phone_number"),
+                bio = json.string("bio"),
+                profilePicture = json.string("profile_picture"),
                 verified = json.optInt("verified"),
-                badgeKey = json.optString("badge_key"),
-                chatStatus = json.optString("chat_status"),
+                badgeKey = json.string("badge_key"),
+                chatStatus = json.string("chat_status"),
                 chatLastSeen = json.optLong("chat_last_seen"),
                 showActiveStatus = json.optBoolean("show_active_status", true),
-                whoCanMessage = privacy?.optString("who_can_message").orEmpty(),
-                whoCanCall = privacy?.optString("who_can_call").orEmpty(),
+                whoCanMessage = privacy?.string("who_can_message").orEmpty(),
+                whoCanCall = privacy?.string("who_can_call").orEmpty(),
                 followers = json.optInt("followers"),
                 following = json.optInt("following"),
                 totalPost = json.optInt("total_post")

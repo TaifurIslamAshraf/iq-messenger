@@ -81,7 +81,6 @@ object ChatWindow {
      * than stacking - there is one panel, because there is one screen.
      */
     fun toggle(context: Context, conversationId: String) {
-        Log.i(TAG, "toggle: showing=" + showing + " wanted=" + conversationId)
         if (showing == conversationId) {
             close()
             return
@@ -90,7 +89,6 @@ object ChatWindow {
     }
 
     fun open(context: Context, conversationId: String) {
-        Log.i(TAG, "open: enter")
         if (conversationId.isBlank() || !ChatHeads.allowed(context)) {
             Log.w(TAG, "open: refused - blank id or no overlay permission")
             return
@@ -299,7 +297,6 @@ object ChatWindow {
             owner.stop()
             return
         }
-        Log.i(TAG, "open: panel added")
 
         windows = manager
         panel = view
@@ -311,11 +308,9 @@ object ChatWindow {
         // The row goes to the top and the panel sits under it, which is the shape
         // that makes the two read as one thing.
         ChatHeads.dock(app)
-        Log.i(TAG, "open: docked the heads row")
     }
 
     fun close() {
-        Log.i(TAG, "close: showing=" + showing, Throwable("who called close"))
         val manager = windows
         val view = panel
         if (manager != null && view != null) runCatching { manager.removeView(view) }

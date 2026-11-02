@@ -22,10 +22,10 @@ data class UploadTarget(
         fun from(json: JSONObject): UploadTarget {
             val headers = json.optJSONObject("headers")
             return UploadTarget(
-                url = json.optString("url"),
-                method = json.optString("method").ifBlank { "PUT" },
+                url = json.string("url"),
+                method = json.string("method").ifBlank { "PUT" },
                 headers = headers?.keys()?.asSequence()
-                    ?.associateWith { headers.optString(it) }
+                    ?.associateWith { headers.string(it) }
                     .orEmpty(),
                 expiresAt = json.optLong("expires_at")
             )
@@ -43,8 +43,8 @@ data class CreatedUpload(
 ) {
     companion object {
         fun from(json: JSONObject): CreatedUpload = CreatedUpload(
-            mediaId = json.optJSONObject("media")?.optString("id").orEmpty(),
-            status = json.optJSONObject("media")?.optString("status").orEmpty(),
+            mediaId = json.optJSONObject("media")?.string("id").orEmpty(),
+            status = json.optJSONObject("media")?.string("status").orEmpty(),
             upload = UploadTarget.from(json.optJSONObject("upload") ?: JSONObject()),
             thumbnailUpload = json.optJSONObject("thumbnail_upload")?.let(UploadTarget::from)
         )
