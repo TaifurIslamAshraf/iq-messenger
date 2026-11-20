@@ -168,6 +168,18 @@ object CallEngine {
         val created = LiveKit.create(appContext = context.applicationContext)
         room = created
 
+        // The camera is opened here, beside the room rather than after it.
+        //
+        // It used to wait for `connect` to come back - signalling, ICE, the whole
+        // join - and only then open the lens, so a video call showed a blank
+        // rectangle for a second or two before you appeared in it. Nothing about
+        // opening a camera needs a connection: the capturer belongs to this
+        // process, and every other calling app shows you yourself while the call
+        // is still ringing. Publishing is what needs the room, and that still
+        // waits; this only means the picture is ready the moment there is
+        // somewhere to send it.
+        if (video) openCamera(created)
+
         events = scope.launch {
             created.events.collect { event ->
                 when (event) {
@@ -237,7 +249,24 @@ object CallEngine {
             runCatching { created.localParticipant.setMicrophoneEnabled(true) }
                 .onSuccess { micOn = true }
             if (video) {
-                if (enableCamera(created)) cameraOn = true
+                val warm = warmCamera
+                val published = warm != null && runCatching {
+                    created.localParticipant.publishVideoTrack(warm)
+                }.getOrDefault(false)
+                // Would not go up, so the lens is let go before anything else
+                // tries to open it: a second camera track while this one still
+                // holds the camera is a second track that cannot start.
+                if (!published && warm != null) {
+                    warmCamera = null
+                    localVideo = null
+                    runCatching { warm.stopCapture() }
+                    runCatching { warm.stop() }
+                    runCatching { warm.dispose() }
+                }
+                // The slow path makes a track of its own. It also covers the
+                // camera being refused at the moment the call began and granted a
+                // second later.
+                if (published || enableCamera(created)) cameraOn = true
             }
             // The earpiece for a voice call, the loudspeaker for a video one: a
             // video call is held away from the face. A headset overrides both.
@@ -351,6 +380,17 @@ object CallEngine {
     }
 
     private fun clear() {
+        // A camera opened for a call that never connected belongs to nobody: the
+        // room disposes what it published, and this was never published. Left
+        // alone it would hold the lens open after the call was gone.
+        warmCamera?.let { track ->
+            warmCamera = null
+            if (room?.localParticipant?.videoTrackPublications.isNullOrEmpty()) {
+                runCatching { track.stopCapture() }
+                runCatching { track.stop() }
+                runCatching { track.dispose() }
+            }
+        }
         // Back to whatever the phone was doing before the call took the stream.
         CallAudio.end()
         events?.cancel()
@@ -439,6 +479,36 @@ object CallEngine {
      * unfiltered track, and the call keeps its picture rather than losing it to a
      * filter nobody asked about.
      */
+    /** The camera that was opened before the room was ready, waiting to be published. */
+    private var warmCamera: io.livekit.android.room.track.LocalVideoTrack? = null
+
+    /**
+     * Opens the lens now and publishes it later.
+     *
+     * Made with the filter already in it, for the reason written over
+     * [enableCamera]: a filter cannot safely be added to a camera track that
+     * already exists.
+     *
+     * [localVideo] is set here, so the self-view has something to draw from the
+     * first frame rather than from the first publication. Refused - no camera
+     * permission yet, another app holding the lens - is not a failure: the call
+     * goes on without a picture and the ordinary path tries again once there is a
+     * room, by which time the person may well have granted it.
+     */
+    private fun openCamera(r: Room) {
+        if (warmCamera != null) return
+        runCatching {
+            val track = r.localParticipant.createVideoTrack(videoProcessor = cameraFilter)
+            track.start()
+            track.startCapture()
+            warmCamera = track
+            localVideo = track
+            cameraOn = true
+        }.onFailure {
+            android.util.Log.w("CallEngine", "Could not open the camera early", it)
+        }
+    }
+
     private suspend fun enableCamera(r: Room): Boolean {
         val me = r.localParticipant
         if (me.getTrackPublication(io.livekit.android.room.track.Track.Source.CAMERA) == null) {
@@ -455,9 +525,13 @@ object CallEngine {
     }
 
     private fun refresh(r: Room) {
+        // Falls back to the warm track, which is the same camera before it has been
+        // published. Without that, any room event arriving in the gap between
+        // opening the camera and publishing it would blank the self-view.
         localVideo = r.localParticipant.videoTrackPublications
             .firstOrNull { it.second is VideoTrack }
             ?.second as? VideoTrack
+            ?: warmCamera
 
         remoteFeeds = r.remoteParticipants.values.map { p: Participant ->
             RemoteFeed(
