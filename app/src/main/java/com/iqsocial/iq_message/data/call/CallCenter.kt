@@ -61,10 +61,15 @@ object CallCenter {
         val token = SessionStore(context).token ?: return
         busy = true
         error = null
+        // Before the request, not after it. Everything from here until the other
+        // phone rings used to be silence, and silence after pressing call is what
+        // makes people press it again.
+        Ringback.connecting(context)
         scope.launch {
             when (val r = CallsApi.start(token, peerId, type)) {
                 is ApiResult.Success -> adopt(context, r.data, type)
                 is ApiResult.Failure -> {
+                    Ringback.stop()
                     error = r.message
                     busy = false
                 }
@@ -269,7 +274,7 @@ object CallCenter {
         // Answered, so the waiting tone has done its job. Said here because this is
         // where the status actually changes - stopping it only in `finish` would
         // leave it ringing underneath a connected call.
-        if (merged.status != CallStatus.RINGING) Ringback.stop()
+        heard(null, merged)
         if (merged.status == CallStatus.ENDED) finish()
     }
 
@@ -287,9 +292,80 @@ object CallCenter {
         // An outgoing call still rings; a ring that nobody answers has to stop.
         if (session.call.status == CallStatus.RINGING) {
             armRingTimeout(session.call)
-            // Only for the end that placed it. The other phone has a ringtone of
-            // its own, and two at once is one too many.
-            if (!session.call.isIncoming) Ringback.start()
+        }
+        heard(context, session.call)
+    }
+
+    /**
+     * What the caller is listening to, decided from where the call has got to.
+     *
+     * Three states, and the middle one is the point: **asked for** (the beep),
+     * **ringing on their phone** (the ringback), **anything else** (silence, because
+     * the call is either live or over). Both sounds are safe to ask for repeatedly -
+     * [Ringback] ignores a stage it is already playing - so this can simply be said
+     * on every update rather than worked out from what was said last.
+     *
+     * **Nothing in the API says whether their phone is actually ringing.** There is
+     * no event for it and no field: `POST /v1/calls` "creates the call as ringing,
+     * rings the other person (call:incoming on their socket, and an FCM push)", and
+     * after that the caller hears only accepted, updated or ended. Per-person state
+     * exists in `participants`, but the spec is explicit that it is "empty for a
+     * direct call" - so for an ordinary one-to-one call it is never there.
+     *
+     * So the beep covers what is genuinely unknown - the request still in flight,
+     * where the call may yet come back `busy` or refused - and the ringback begins
+     * when the server says the call exists and the ring has gone out. Where the
+     * participant list does arrive (a group call), it is better information and is
+     * used: the ringback waits for somebody to actually be ringing.
+     *
+     * Telling the caller the moment the other phone truly rings would need the
+     * server to say so - a `call:ringing` event, or participant states on direct
+     * calls. It cannot be worked out from this end.
+     *
+     * Only the caller hears any of this: the person being called has a ringtone of
+     * its own, and two at once is one too many.
+     */
+    private fun heard(context: Context?, live: ChatCall) {
+        if (live.isIncoming) return
+        if (live.status != CallStatus.RINGING) {
+            unconfirmed?.cancel()
+            unconfirmed = null
+            Ringback.stop()
+            return
+        }
+        val host = context ?: ringingContext ?: return
+        // No participant list means no per-person news, which is the normal case:
+        // the spec says participants is "empty for a direct call". Then the
+        // server's own `ringing` is the most that is known, and it is enough - it
+        // is returned once the call exists and the ring has been sent out.
+        if (live.participants.isEmpty() || live.participants.any { it.ringing }) {
+            unconfirmed?.cancel()
+            unconfirmed = null
+            Ringback.ringing(host)
+        } else {
+            Ringback.connecting(host)
+            armRingbackFallback(host, live)
+        }
+    }
+
+    private var unconfirmed: Job? = null
+
+    /**
+     * Moves on to the ringback even if nobody ever says the other phone is ringing.
+     *
+     * The participant list is the honest signal and it is not guaranteed: a server
+     * that leaves `participants` out of its reply, or never updates a state from
+     * `invited` to `ringing`, would leave the caller beeping through an entire call
+     * that was ringing perfectly well. A beep that never becomes a ringback reads as
+     * a call that never connected, which is worse than ringing a second early.
+     */
+    private fun armRingbackFallback(context: Context, target: ChatCall) {
+        if (unconfirmed?.isActive == true) return
+        unconfirmed = scope.launch {
+            delay(UNCONFIRMED_MS)
+            val live = call ?: return@launch
+            if (live.id != target.id || live.isIncoming) return@launch
+            if (live.status == CallStatus.RINGING) Ringback.ringing(context)
         }
     }
 
@@ -318,6 +394,8 @@ object CallCenter {
         clearWaiting()
         ringTimer?.cancel()
         ringTimer = null
+        unconfirmed?.cancel()
+        unconfirmed = null
         call = null
         busy = false
         CallEngine.disconnect()
@@ -343,6 +421,12 @@ object CallCenter {
     fun init(context: Context) {
         ringingContext = context.applicationContext
         CallEngine.onConnectionLost = { connectionLost() }
+        CallEngine.onEveryoneLeft = { everyoneLeft() }
+        // Anything left ringing from a previous life of this process. A call
+        // notification is taken down by whatever ends the call, and a process that
+        // was killed ends nothing - so the one thing that can be relied on to clear
+        // it is the next start, which is this.
+        if (call == null) RingingNotification.hide(context)
     }
 
     /**
@@ -367,6 +451,29 @@ object CallCenter {
         ringingContext?.let { end(it) } ?: finish()
     }
 
+    /**
+     * The room emptied and the server never said the call was over.
+     *
+     * The far side of [connectionLost]. When a call dies because one phone's
+     * connection went, that phone says so - over the connection that has just gone,
+     * so the message never lands. This end hears nothing: no `call:ended`, no
+     * `Disconnected` of its own, because its own connection is fine. All that
+     * happens is that the room empties, and without this the call screen ran on,
+     * timer counting, over a call that ended minutes ago.
+     *
+     * The reason is shown rather than ended silently, because from here it looks
+     * exactly like the other person hanging up - and they did not; their phone
+     * fell off the network mid-sentence, which is worth knowing when deciding
+     * whether to call back.
+     */
+    private fun everyoneLeft() {
+        if (call == null) return
+        error = "The other side lost connection."
+        // Through `end` so the server is told: this phone's connection is the one
+        // that still works, so it is the one that can close the call properly.
+        ringingContext?.let { end(it) } ?: finish()
+    }
+
     /** Signing out ends whatever was going on. */
     fun clear() {
         finish()
@@ -376,4 +483,13 @@ object CallCenter {
     fun dismissError() {
         error = null
     }
+
+    /**
+     * How long the beep waits for somebody to say the other phone is ringing.
+     *
+     * Longer than a round trip to the server and a push on its way, short enough
+     * that a caller who gets no confirmation at all is not still beeping when the
+     * call is answered.
+     */
+    private const val UNCONFIRMED_MS = 4_000L
 }

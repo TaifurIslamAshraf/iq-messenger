@@ -1,6 +1,8 @@
 package com.iqsocial.iq_message.data.chat
 
 import android.content.Context
+import com.iqsocial.iq_message.data.local.ChatStore
+import com.iqsocial.iq_message.data.auth.SessionStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -107,6 +109,11 @@ object ChatRepository {
      */
     suspend fun open(context: Context, token: String?) {
         store = context.applicationContext
+        // Whose messages these are, written down while somebody is signed in. The
+        // store checks it on the next cold start, and without this it would only
+        // ever have been told by the start that opened the database - which, after a
+        // sign-out and a sign-in without a restart, was the wrong account or none.
+        SessionStore(context).load()?.uid?.let { ChatStore.claim(context, it) }
         if (conversations.isEmpty()) {
             val held = ChatList.stored(context)
             // Shown, but **not** marked loaded. `loaded` says the server has been
@@ -114,7 +121,13 @@ object ChatRepository {
             // it here restarted the very effect this is running inside, cancelling
             // the fetch below before it could finish. The stored list appearing is
             // not an answer from anybody; it is what there is until one arrives.
-            if (held.isNotEmpty()) conversations = held
+            if (held.isNotEmpty()) {
+                conversations = held
+                // The names and faces, the same way the server list hands them over.
+                // Anything that opens a chat before the network answers reads them
+                // from here, and with no connection the network never does.
+                held.forEach { c -> c.peer?.let { KnownPeople.remember(c.id, it) } }
+            }
         }
         load(token, force = true)
     }

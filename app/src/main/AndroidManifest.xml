@@ -58,6 +58,12 @@
          notification still shows, just without the full-screen half. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <!-- Lets the app be told when somebody screenshots it, which is what
+         notify_on_screenshot is for. Android 14 and up; a normal permission, so it
+         is granted at install and there is nothing to ask for. It reports only
+         screenshots of this app's own window, and only while it is in front. -->
+    <uses-permission android:name="android.permission.DETECT_SCREEN_CAPTURE" />
+
     <!-- A phone without a camera can still take audio calls. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -120,8 +126,23 @@
              recreate it for those would be rebuilt twice per minimise - losing the
              nav stack, the draft being typed and the renderer the call is drawn
              into. -->
+        <!-- launchMode: one instance of this app, ever.
+
+             Standard was wrong for a floating window and wrong in a way that only
+             showed with one up. Tapping the launcher icon while the app was in
+             picture-in-picture did not bring the window back - it built a **second**
+             MainActivity over the top of it, with a second composition that knew
+             nothing of the first: a fresh navigation stack starting at the chat
+             list, and a routing effect that saw a live call with nowhere to put it
+             and so opened the call screen again. The person pressed back to step out
+             of the call, tapped the icon, and landed straight back on the call.
+
+             singleTask, rather than singleTop, because the task itself is in another
+             windowing mode: singleTop only reuses an instance that is already on top
+             of the task being launched into, which this one is not. -->
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTask"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:screenOrientation="portrait"
@@ -209,7 +230,7 @@
              icon for it. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="messages" />
+            android:value="messages_v2" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_notification" />

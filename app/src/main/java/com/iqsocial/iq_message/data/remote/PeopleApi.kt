@@ -10,6 +10,47 @@ import androidx.compose.runtime.Immutable
  * these results **never carry a phone number**, by design — you can look someone up
  * by their number, but you cannot read numbers back off a search.
  */
+/**
+ * Somebody else's profile, as much of it as they share.
+ *
+ * Deliberately less than [MessengerProfile]: no phone number, no birthday, no
+ * privacy choices. The server will not send those about another person and this
+ * type will not hold them, so there is nowhere for a screen to accidentally draw
+ * one.
+ */
+@Immutable
+data class PublicProfile(
+    val uid: String,
+    val fullname: String,
+    val profilePicture: String,
+    /** Empty when they still have the default banner. */
+    val coverPicture: String,
+    val bio: String,
+    val verified: Int,
+    val badgeKey: String,
+    val followers: Int,
+    val following: Int,
+    /** Posts only; reels are a separate collection and are not counted. */
+    val totalPost: Int
+) {
+    val isVerified: Boolean get() = verified != 0
+
+    companion object {
+        fun from(json: org.json.JSONObject): PublicProfile = PublicProfile(
+            uid = json.string("uid"),
+            fullname = json.string("fullname").trim(),
+            profilePicture = json.string("profile_picture"),
+            coverPicture = json.string("cover_picture"),
+            bio = json.string("bio"),
+            verified = json.optInt("verified"),
+            badgeKey = json.string("badge_key"),
+            followers = json.optInt("followers"),
+            following = json.optInt("following"),
+            totalPost = json.optInt("total_post")
+        )
+    }
+}
+
 object PeopleApi {
 
     /** `q` is rejected below this length, so the UI should not ask. */
@@ -42,6 +83,21 @@ object PeopleApi {
      * [region] resolves a number typed without a country code, and defaults to the
      * caller's own country when omitted.
      */
+    /**
+     * One person, by id.
+     *
+     * 404 covers everything that is not a plain yes - an unknown id, a banned
+     * account, somebody who has blocked you - which is the same answer search
+     * gives, and for the same reason: the absence of an answer should not say
+     * which of those it was.
+     */
+    suspend fun profile(token: String, uid: String): ApiResult<PublicProfile> =
+        ApiClient.get(
+            "/v1/people/${Uri.encode(uid)}",
+            token,
+            MessengerConfig.BASE_URL
+        ).mapTo(PublicProfile::from)
+
     suspend fun search(
         token: String,
         query: String,

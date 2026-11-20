@@ -63,7 +63,16 @@ sealed interface ApiResult<out T> {
          * and giving up on that would lose a message for being written in the wrong
          * place.
          */
-        val offline: Boolean = false
+        val offline: Boolean = false,
+        /**
+         * The envelope's `responseObject`, when a refusal carried one.
+         *
+         * Some refusals are answers. `PUT /v1/me/name` inside the sixty days is a
+         * 409 whose body says *when* the name may change again, and a caller that
+         * only gets the sentence has to ask the server a second question to say
+         * anything exact. Null for the ordinary failure that carries nothing.
+         */
+        val payload: org.json.JSONObject? = null
     ) : ApiResult<Nothing>
 }
 
@@ -205,7 +214,11 @@ object ApiClient {
                         .takeIf { it.isNotBlank() }
                 }
                 val missing = code == 404 || msg.equals("Route not found", ignoreCase = true)
-                ApiResult.Failure(detail ?: msg, notImplemented = missing)
+                ApiResult.Failure(
+                    detail ?: msg,
+                    notImplemented = missing,
+                    payload = json.optJSONObject("responseObject")
+                )
             }
         } catch (e: java.net.SocketTimeoutException) {
             // Marked as offline rather than refused: a timeout is the server not

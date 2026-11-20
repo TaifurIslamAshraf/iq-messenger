@@ -1,10 +1,12 @@
 package com.iqsocial.iq_message.ui.components
 
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Process
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -69,11 +71,14 @@ fun FullScreenCallsGate() {
     val session = remember { SessionStore(context) }
     var ask by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        // Nothing to ask for below Android 14: the permission is granted with the
-        // install and a full-screen intent works as it always did.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return@LaunchedEffect
-        if (context.canTakeOverScreen()) return@LaunchedEffect
+    // Two different switches can stop the same thing, so both are asked about
+    // here: Android's own permission, and the one Xiaomi keeps of its own.
+    val android14 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+        !context.canTakeOverScreen()
+    val byThePhone = context.phoneBlocksLockScreen()
+
+    LaunchedEffect(android14, byThePhone) {
+        if (!android14 && !byThePhone) return@LaunchedEffect
         if (session.fullScreenCallsPrompted) return@LaunchedEffect
         ask = true
     }
@@ -138,9 +143,16 @@ fun FullScreenCallsGate() {
 
             Spacer(Modifier.height(d.gapSm))
             Text(
-                "Android asks separately before an app may take over a locked " +
-                    "screen. Without it a call still arrives, but only as a " +
-                    "notification - which a locked phone does not show.",
+                if (android14) {
+                    "Android asks separately before an app may take over a locked " +
+                        "screen. Without it a call still arrives, but only as a " +
+                        "notification - which a locked phone does not show."
+                } else {
+                    "This phone keeps two switches of its own for it: " +
+                        "\"Show on Lock screen\" and \"Display pop-up windows " +
+                        "while running in background\". Until both are on, a call " +
+                        "rings but never reaches the screen."
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 color = InkMuted,
                 textAlign = TextAlign.Center,
@@ -157,7 +169,10 @@ fun FullScreenCallsGate() {
                     .clickable {
                         session.fullScreenCallsPrompted = true
                         ask = false
-                        context.openFullScreenSettings()
+                        // Android's own page first where that is what is missing;
+                        // the phone's page is reachable from Settings either way.
+                        if (android14) context.openFullScreenSettings()
+                        else context.openPhoneCallSettings()
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -187,7 +202,7 @@ fun Context.canTakeOverScreen(): Boolean {
  * often a manufacturer's rather than Android's - and landing on the app's page is
  * better than a dialog that appears to do nothing.
  */
-private fun Context.openFullScreenSettings() {
+fun Context.openFullScreenSettings() {
     val direct = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
         .setData(Uri.fromParts("package", packageName, null))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -201,3 +216,80 @@ private fun Context.openFullScreenSettings() {
         )
     }
 }
+
+/* ------------------------------------------------------------------------- */
+/*  The phone's own switches, where it keeps any                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Whether this phone is likely to be stopping a call from reaching the lock screen
+ * by itself.
+ *
+ * Xiaomi, Redmi and POCO phones hold two permissions that Android does not have and
+ * that no API asks for: **Show on Lock screen** and **Display pop-up windows while
+ * running in background**. Both are off for anything not installed from their store.
+ * With them off everything here works perfectly and nothing is visible: the
+ * notification is posted, the channel rings, and the activity the full-screen intent
+ * names is refused silently at launch - a phone that rings in your pocket and shows
+ * nothing when you take it out.
+ *
+ * MIUI answers for them through app-ops numbers of its own, outside Android's set
+ * and outside its public API, so the reading is attempted and not relied on. **An
+ * unreadable answer counts as blocked**: being offered a settings page that was not
+ * needed costs a tap, while missing calls costs calls.
+ */
+fun Context.phoneBlocksLockScreen(): Boolean {
+    if (!xiaomiFamily) return false
+    return !(op(OP_SHOW_WHEN_LOCKED) == true && op(OP_BACKGROUND_START_ACTIVITY) == true)
+}
+
+/**
+ * MIUI's permission editor for this app, which is where those two switches live.
+ *
+ * Android's own app page does not list them - they are not Android's - so sending
+ * somebody there would be sending them somewhere the switch is not.
+ */
+fun Context.openPhoneCallSettings() {
+    val miui = Intent("miui.intent.action.APP_PERM_EDITOR")
+        .setClassName(
+            "com.miui.securitycenter",
+            "com.miui.permcenter.permissions.PermissionsEditorActivity"
+        )
+        .putExtra("extra_pkgname", packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (runCatching { startActivity(miui) }.isSuccess) return
+
+    runCatching {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.fromParts("package", packageName, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
+private val xiaomiFamily: Boolean
+    get() = listOf(Build.MANUFACTURER, Build.BRAND)
+        .any { it.equals("xiaomi", true) || it.equals("redmi", true) || it.equals("poco", true) }
+
+/**
+ * One of MIUI's own app-ops, or null when it cannot be read.
+ *
+ * `checkOpNoThrow(int, int, String)` is not public API, and from Android 9 the
+ * non-SDK restrictions may refuse it outright. Hence reflection, and hence null
+ * rather than a guess when it is refused.
+ */
+private fun Context.op(code: Int): Boolean? = runCatching {
+    val manager = getSystemService(AppOpsManager::class.java) ?: return null
+    val check = AppOpsManager::class.java.getMethod(
+        "checkOpNoThrow",
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+        String::class.java
+    )
+    check.invoke(manager, code, Process.myUid(), packageName) == AppOpsManager.MODE_ALLOWED
+}.getOrNull()
+
+/** MIUI's numbers, not Android's, and not documented anywhere but by use. */
+private const val OP_SHOW_WHEN_LOCKED = 10020
+private const val OP_BACKGROUND_START_ACTIVITY = 10021

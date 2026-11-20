@@ -1,6 +1,11 @@
 package com.iqsocial.iq_message.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,6 +52,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,13 +63,19 @@ import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.profile.MeRepository
 import com.iqsocial.iq_message.data.profile.SettingsRepository
+import com.iqsocial.iq_message.data.media.RemoteImage
 import com.iqsocial.iq_message.data.remote.MessengerProfile
 import com.iqsocial.iq_message.data.remote.NotificationPreview
+import com.iqsocial.iq_message.data.remote.ProfileImage
 import kotlinx.coroutines.launch
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.drawHeaderWave
+import com.iqsocial.iq_message.ui.components.canTakeOverScreen
+import com.iqsocial.iq_message.ui.components.openFullScreenSettings
+import com.iqsocial.iq_message.ui.components.openPhoneCallSettings
+import com.iqsocial.iq_message.ui.components.phoneBlocksLockScreen
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.BrandSunset
 import com.iqsocial.iq_message.ui.theme.CanvasGrey
@@ -78,12 +90,29 @@ import com.iqsocial.iq_message.ui.theme.ProtectedGreen
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 
 @Composable
-fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
+fun ProfileScreen(
+    onBack: () -> Unit,
+    onLogOut: () -> Unit,
+    /**
+     * The three settings that change something, each its own screen.
+     *
+     * Pushed by whoever owns the navigation stack rather than opened here as a
+     * sheet or a dialog: a settings page that edits an account belongs on the
+     * stack, with the back gesture, a title and the whole height for a form - all
+     * of which a popup gives up.
+     */
+    onEditProfile: () -> Unit = {},
+    /** This account's QR code, which is how somebody adds it without a number. */
+    onQrCode: () -> Unit = {},
+    /** A picture has been chosen; it is cropped before anything is uploaded. */
+    onCrop: (Uri, ProfileImage) -> Unit = { _, _ -> },
+    onPrivacy: () -> Unit = {},
+    onNotifications: () -> Unit = {}
+) {
     SystemBarIcons(darkIcons = false)
     val d = IqTheme.dimens
     val headerHeight = d.scaled(248)
     val scope = rememberCoroutineScope()
-    var previewPicker by remember { mutableStateOf(false) }
 
     // The real profile, which only /v1/me can supply. Fetched once per launch and
     // cached, so switching tabs does not re-request it.
@@ -100,6 +129,41 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
         if (!SettingsRepository.loaded) SettingsRepository.load(session.token)
     }
 
+    /**
+     * Android's own photo picker: no storage permission, and the reader chooses
+     * which single picture this app may see rather than granting it the gallery.
+     *
+     * Which of the two pictures it is for is held beside it, because the launcher
+     * hands back only a `Uri` - by the time it answers, the sheet that started it
+     * has closed and taken its kind with it.
+     */
+    var choosingFor by remember { mutableStateOf<ProfileImage?>(null) }
+    val photos = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { picked: Uri? ->
+        val kind = choosingFor
+        choosingFor = null
+        // To the crop screen, not to the upload. Every place that draws one of
+        // these cuts it to shape anyway, and the reader should be the one who
+        // decides which part survives that.
+        if (picked != null && kind != null) onCrop(picked, kind)
+    }
+
+    /**
+     * Straight to Android's picker, with nothing in between.
+     *
+     * There was a two-item sheet here first - "choose" or "remove" - which is a
+     * popup asking which of two things a press on a camera button meant. The
+     * camera button means change it; removing one is an edit, and lives with the
+     * other edits in [EditProfileScreen].
+     */
+    fun choose(kind: ProfileImage) {
+        choosingFor = kind
+        photos.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -114,6 +178,35 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     .height(headerHeight)
                     .background(BrandSunset)
             ) {
+                // The account's own banner, under the wave rather than instead of
+                // it: the wave is what joins the header to the page below, and a
+                // photo with a straight edge across the screen would be a different
+                // screen. Dimmed, because the white title and the two buttons sit
+                // on top of it and a bright picture takes them with it.
+                val cover = profile?.coverPicture.orEmpty()
+                if (cover.isNotBlank()) {
+                    var banner by remember(cover) {
+                        mutableStateOf(RemoteImage.peek(cover, RemoteImage.PREVIEW_PX))
+                    }
+                    LaunchedEffect(cover) {
+                        if (banner == null) {
+                            banner = RemoteImage.load(cover, targetPx = RemoteImage.PREVIEW_PX)
+                        }
+                    }
+                    banner?.let {
+                        Image(
+                            bitmap = it,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.22f))
+                        )
+                    }
+                }
                 Canvas(Modifier.fillMaxSize()) {
                     drawHeaderWave(Color.White, alpha = 0.16f)
                     translate(0f, size.height * 0.10f) {
@@ -146,9 +239,16 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     )
                     Spacer(Modifier.weight(1f))
                     CircleIconButton(
+                        icon = IqIcons.Camera,
+                        contentDescription = "Change your cover photo",
+                        onClick = { choose(ProfileImage.COVER) },
+                        background = Color.White.copy(alpha = 0.22f),
+                        tint = Color.White
+                    )
+                    CircleIconButton(
                         icon = IqIcons.QrCode,
                         contentDescription = "Your QR code",
-                        onClick = {},
+                        onClick = onQrCode,
                         background = Color.White.copy(alpha = 0.22f),
                         tint = Color.White
                     )
@@ -162,7 +262,28 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                 }
 
                 Spacer(Modifier.height(d.gapLg))
-                IdentityCard(profile)
+                IdentityCard(
+                    profile = profile,
+                    onEdit = onEditProfile,
+                    onPicture = { choose(ProfileImage.PICTURE) }
+                )
+            }
+        }
+
+        // Why the last write failed, where the write was started from.
+        //
+        // The pictures are changed from this page - the two camera buttons - and
+        // until this line existed a refused upload did exactly nothing visible:
+        // the spinner finished, the picture stayed as it was, and the reason sat
+        // in a field nothing drew.
+        MeRepository.error?.let { why ->
+            Spacer(Modifier.height(d.gapMd))
+            PageWidth {
+                Text(
+                    why,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Crimson
+                )
             }
         }
 
@@ -204,7 +325,14 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     icon = IqIcons.PersonOutline,
                     iconTint = CrimsonTint,
                     title = "Account",
-                    subtitle = "Profile & verification"
+                    subtitle = profile?.let {
+                        listOfNotNull(
+                            it.gender.takeIf(String::isNotBlank),
+                            it.location.takeIf(String::isNotBlank)
+                                ?: it.country.takeIf(String::isNotBlank)
+                        ).joinToString(" \u00b7 ").ifBlank { "Name, bio, birthday and more" }
+                    } ?: "Profile & verification",
+                    onClick = onEditProfile
                 ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
 
                 SettingDivider()
@@ -212,11 +340,12 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     icon = IqIcons.ShieldOutline,
                     iconTint = Color(0xFFE3F5E9),
                     title = "Privacy",
-                    // Read-only: /v1/me serves these but has no write verb, so the
-                    // row reports them rather than pretending to change them.
+                    // Writable now: `/v1/me/privacy` takes both of these, so the row
+                    // opens them rather than only reporting them.
                     // One line, sharing the row with the "Protected" chip, so the
                     // common case of both settings matching is collapsed rather than
                     // spelled out and then truncated.
+                    onClick = onPrivacy,
                     subtitle = profile?.let {
                         if (it.whoCanMessage == it.whoCanCall) {
                             "Messages & calls: ${readable(it.whoCanMessage)}"
@@ -247,7 +376,7 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                     iconTint = CrimsonTint,
                     title = "Notifications",
                     subtitle = SettingsRepository.notificationPreview.summary,
-                    onClick = { previewPicker = true }
+                    onClick = onNotifications
                 ) {
                     if (SettingsRepository.saving) {
                         CircularProgressIndicator(
@@ -305,6 +434,123 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
                 }
 
                 SettingDivider()
+                // The permission that decides whether a call can take the screen -
+                // and, on Android 15, whether the running call's notification is
+                // allowed to be drawn as a call at all.
+                //
+                // A row rather than only the prompt at sign-in, because that prompt
+                // asks once. Declined, it never asks again, and from then on calls
+                // arrive as a banner a locked phone does not show and the ongoing
+                // notification quietly falls back to the plain template - with
+                // nothing anywhere to say which switch would undo it. A setting
+                // somebody can turn down has to be a setting they can find.
+                if (!context.canTakeOverScreen()) {
+                    SettingRow(
+                        icon = IqIcons.Phone,
+                        iconTint = CrimsonTint,
+                        title = "Full screen calls",
+                        subtitle = "Calls arrive as a banner, not a ringing screen",
+                        onClick = { context.openFullScreenSettings() }
+                    ) {
+                        Text(
+                            "Allow",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Crimson,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.width(d.gapSm))
+                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                    }
+
+                    SettingDivider()
+                }
+
+                // The same thing again, for the phones that keep their own switch
+                // for it. Separate from the row above because they are separate
+                // permissions in separate places: granting Android's does nothing
+                // about Xiaomi's, and somebody who has done the first and still
+                // misses calls needs to be told there is a second.
+                if (context.phoneBlocksLockScreen()) {
+                    SettingRow(
+                        icon = IqIcons.Lock,
+                        iconTint = CrimsonTint,
+                        title = "Lock screen & pop-ups",
+                        subtitle = "This phone keeps its own switch for ringing calls",
+                        onClick = { context.openPhoneCallSettings() }
+                    ) {
+                        Text(
+                            "Allow",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Crimson,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.width(d.gapSm))
+                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                    }
+
+                    SettingDivider()
+                }
+                // Whether other people may screenshot this account.
+                //
+                // The switch is about them, not about this phone: the setting
+                // travels with the account, and the app showing this person's chat,
+                // call or profile is the one that locks its window. This phone does
+                // the same for whoever it is looking at.
+                SettingRow(
+                    icon = if (SettingsRepository.allowScreenshot) IqIcons.Camera
+                    else IqIcons.Lock,
+                    iconTint = CrimsonTint,
+                    title = "Screenshots",
+                    subtitle = if (SettingsRepository.allowScreenshot) {
+                        "Others can screenshot your chats, calls and profile"
+                    } else {
+                        "Others are blocked from screenshotting you"
+                    }
+                ) {
+                    Switch(
+                        checked = SettingsRepository.allowScreenshot,
+                        enabled = !SettingsRepository.saving,
+                        onCheckedChange = { want ->
+                            scope.launch {
+                                SettingsRepository.setAllowScreenshot(session.token, want)
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Crimson,
+                            checkedBorderColor = Crimson
+                        )
+                    )
+                }
+
+                SettingDivider()
+                SettingRow(
+                    icon = IqIcons.Bell,
+                    iconTint = CrimsonTint,
+                    title = "Screenshot alerts",
+                    subtitle = if (SettingsRepository.notifyOnScreenshot) {
+                        "You're told when someone screenshots you"
+                    } else {
+                        "Screenshots of you pass without a word"
+                    }
+                ) {
+                    Switch(
+                        checked = SettingsRepository.notifyOnScreenshot,
+                        enabled = !SettingsRepository.saving,
+                        onCheckedChange = { want ->
+                            scope.launch {
+                                SettingsRepository.setNotifyOnScreenshot(session.token, want)
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Crimson,
+                            checkedBorderColor = Crimson
+                        )
+                    )
+                }
+
+                SettingDivider()
                 SettingRow(
                     icon = IqIcons.Storage,
                     iconTint = CrimsonTint,
@@ -349,26 +595,6 @@ fun ProfileScreen(onBack: () -> Unit, onLogOut: () -> Unit) {
             Spacer(Modifier.height(d.gapXl))
         }
     }
-
-    if (previewPicker) {
-        NotificationPreviewPicker(
-            current = SettingsRepository.notificationPreview,
-            onPick = { option ->
-                scope.launch {
-                    // Closed only once it took. A failed write leaves the sheet up
-                    // with the reason under it, because the alternative is a screen
-                    // that quietly goes back to the old value with no explanation.
-                    if (SettingsRepository.setNotificationPreview(session.token, option)) {
-                        previewPicker = false
-                    }
-                }
-            },
-            onDismiss = {
-                previewPicker = false
-                SettingsRepository.clearError()
-            }
-        )
-    }
 }
 
 /**
@@ -390,7 +616,7 @@ private fun abbreviate(value: Int, unit: Int, suffix: String): String {
 }
 
 /** What the row says underneath "Notifications". */
-private val NotificationPreview.summary: String
+internal val NotificationPreview.summary: String
     get() = when (this) {
         NotificationPreview.NAME_AND_TEXT -> "Sender and message shown"
         NotificationPreview.NAME_ONLY -> "Sender shown, message hidden"
@@ -398,14 +624,14 @@ private val NotificationPreview.summary: String
     }
 
 /** What the row says on the right, and what the picker lists. */
-private val NotificationPreview.label: String
+internal val NotificationPreview.label: String
     get() = when (this) {
         NotificationPreview.NAME_AND_TEXT -> "Name and text"
         NotificationPreview.NAME_ONLY -> "Name only"
         NotificationPreview.NOTHING -> "Nothing"
     }
 
-private val NotificationPreview.detail: String
+internal val NotificationPreview.detail: String
     get() = when (this) {
         NotificationPreview.NAME_AND_TEXT ->
             "Who wrote, and the start of what they said."
@@ -414,106 +640,6 @@ private val NotificationPreview.detail: String
         NotificationPreview.NOTHING ->
             "Only that a message arrived. Neither name nor text leaves the server."
     }
-
-/**
- * The three choices.
- *
- * Worth saying in the sheet rather than leaving to a help page: this is not about
- * what the phone draws on its lock screen. The hidden part is never sent, so it
- * cannot be read off this device by anyone, including anything else installed on it.
- * That is the reason to choose the narrower option, and a list of three bare labels
- * would not say it.
- */
-@Composable
-private fun NotificationPreviewPicker(
-    current: NotificationPreview,
-    onPick: (NotificationPreview) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val d = IqTheme.dimens
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
-                .padding(d.gapLg)
-        ) {
-            Text(
-                "Notification preview",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Ink
-            )
-            Spacer(Modifier.height(d.gapXs))
-            Text(
-                "Whatever is hidden is never sent to your phones. It applies to " +
-                    "every device on your account, from the next message on. Calls " +
-                    "always say who is calling.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = InkMuted
-            )
-
-            Spacer(Modifier.height(d.gapMd))
-            NotificationPreview.entries.forEach { option ->
-                val chosen = option == current
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(d.radiusMd))
-                        .clickable { onPick(option) }
-                        .padding(vertical = d.gapSm, horizontal = d.gapSm),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier
-                            .size(d.icon)
-                            .clip(CircleShape)
-                            .background(if (chosen) Crimson else Color.Transparent)
-                            .border(
-                                if (chosen) 0.dp else 2.dp,
-                                InkFaint,
-                                CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (chosen) {
-                            Icon(
-                                IqIcons.Check,
-                                null,
-                                Modifier.size(d.iconSm),
-                                tint = Color.White
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(d.gapMd))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            option.label,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Ink
-                        )
-                        Text(
-                            option.detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = InkMuted
-                        )
-                    }
-                }
-            }
-
-            SettingsRepository.error?.let { why ->
-                Spacer(Modifier.height(d.gapSm))
-                Text(
-                    why,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Crimson,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-    }
-}
 
 /** Turns an API enum such as `my_contacts` into something readable. */
 private fun readable(value: String): String =
@@ -535,7 +661,11 @@ private fun PageWidth(content: @Composable androidx.compose.foundation.layout.Co
 }
 
 @Composable
-private fun IdentityCard(profile: MessengerProfile?) {
+private fun IdentityCard(
+    profile: MessengerProfile?,
+    onEdit: () -> Unit,
+    onPicture: () -> Unit
+) {
     val d = IqTheme.dimens
     val editSize = d.iconButtonLg
 
@@ -567,15 +697,47 @@ private fun IdentityCard(profile: MessengerProfile?) {
                         .padding(d.gapLg),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Avatar(
-                        person = me,
-                        size = d.avatarXl,
-                        ringWidth = d.scaled(4),
-                        ringColor = Color.White,
-                        ringGap = 0.dp,
-                        // Respects the user's own "show active status" setting.
-                        showPresence = profile?.showActiveStatus == true
-                    )
+                    Box {
+                        Avatar(
+                            person = me,
+                            size = d.avatarXl,
+                            ringWidth = d.scaled(4),
+                            ringColor = Color.White,
+                            ringGap = 0.dp,
+                            // Respects the user's own "show active status" setting.
+                            showPresence = profile?.showActiveStatus == true
+                        )
+                        // Over the picture rather than beside it, which is where
+                        // every app that has ever let somebody change one puts it -
+                        // the thing to press is the thing being changed.
+                        val lifting = MeRepository.imageProgress
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(d.iconButton)
+                                .clip(CircleShape)
+                                .background(Crimson)
+                                .border(d.scaled(2), Color.White, CircleShape)
+                                .clickable(enabled = lifting == null, onClick = onPicture),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (lifting != null) {
+                                CircularProgressIndicator(
+                                    progress = { lifting },
+                                    modifier = Modifier.size(d.iconSm),
+                                    color = Color.White,
+                                    strokeWidth = d.scaled(2)
+                                )
+                            } else {
+                                Icon(
+                                    IqIcons.Camera,
+                                    "Change your profile photo",
+                                    Modifier.size(d.iconSm),
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.width(d.gapMd))
                     Column(
                         Modifier
@@ -627,7 +789,7 @@ private fun IdentityCard(profile: MessengerProfile?) {
                         .size(editSize)
                         .clip(CircleShape)
                         .background(Ink)
-                        .clickable { },
+                        .clickable(onClick = onEdit),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(IqIcons.Edit, "Edit profile", Modifier.size(d.iconSm), tint = Color.White)

@@ -14,6 +14,7 @@ import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.OpenChat
 import com.iqsocial.iq_message.data.media.RemoteImage
+import com.iqsocial.iq_message.data.privacy.ScreenshotAlerts
 import com.iqsocial.iq_message.data.overlay.ChatHeads
 import com.iqsocial.iq_message.data.remote.ChatCall
 import com.iqsocial.iq_message.data.remote.ConversationsApi
@@ -137,6 +138,12 @@ class IqMessagingService : FirebaseMessagingService() {
             // a call has to be answered from a phone that was asleep.
             "call:incoming" -> payload.optJSONObject("call")
                 ?.let { CallCenter.ringing(ChatCall.from(it), applicationContext) }
+
+            // Somebody screenshotted this account. The server has already checked
+            // that this reader asked to be told; see [ScreenshotAlerts].
+            "profile:screenshot" -> scope.launch {
+                runCatching { ScreenshotAlerts.live(applicationContext, payload) }
+            }
 
             // Somebody else got there first, or it is over. Either way this phone
             // stops - which is the whole purpose of sending these.
@@ -316,8 +323,33 @@ class IqMessagingService : FirebaseMessagingService() {
     }
 
     companion object {
-        const val CHANNEL_MESSAGES = "messages"
-        const val CHANNEL_MISSED_CALLS = "missed_calls"
+        /**
+         * All three ids end in `_v2`, because all three gained the app's own sound.
+         *
+         * Android fixes a channel's sound when it first creates it and ignores
+         * every later attempt to change it, so that an update cannot overwrite what
+         * the person has chosen. A new sound therefore needs a new channel, and the
+         * old ones are deleted in [ensureChannels] rather than left behind as dead
+         * duplicates in the notification settings.
+         *
+         * The manifest's `default_notification_channel_id` names the first of these
+         * and has to be changed with it.
+         */
+        const val CHANNEL_MESSAGES = "messages_v2"
+        const val CHANNEL_MISSED_CALLS = "missed_calls_v2"
+
+        /**
+         * Things that happened to this account rather than things said to it.
+         *
+         * Its own channel because it is its own kind of interruption: somebody
+         * screenshotting your profile is worth knowing and is not worth the sound
+         * and the heads-up a message gets, and a reader who wants one without the
+         * other can only have that if the two are separable.
+         */
+        const val CHANNEL_ALERTS = "alerts_v2"
+
+        /** What the same three were called before the sound changed. */
+        private val CHANNELS_OLD = listOf("messages", "missed_calls", "alerts")
 
         /** The two fields every push carries, and so the two extras a tap carries. */
         const val EXTRA_EVENT = "event"
@@ -349,6 +381,14 @@ class IqMessagingService : FirebaseMessagingService() {
         fun ensureChannels(context: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
             val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            // One sound for all three, so anything from this app is recognised as
+            // this app. They differ in how loudly they interrupt, not in voice.
+            val sound = com.iqsocial.iq_message.data.media.Tones.notification(context)
+            val asNotification = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             manager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_MESSAGES,
@@ -357,6 +397,7 @@ class IqMessagingService : FirebaseMessagingService() {
                 ).apply {
                     description = "New messages"
                     enableVibration(true)
+                    setSound(sound, asNotification)
                 }
             )
             manager.createNotificationChannel(
@@ -364,8 +405,25 @@ class IqMessagingService : FirebaseMessagingService() {
                     CHANNEL_MISSED_CALLS,
                     "Missed calls",
                     NotificationManager.IMPORTANCE_DEFAULT
-                ).apply { description = "Calls you did not pick up" }
+                ).apply {
+                    description = "Calls you did not pick up"
+                    setSound(sound, asNotification)
+                }
             )
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ALERTS,
+                    "Alerts",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "Screenshots of your profile, and similar"
+                    setSound(sound, asNotification)
+                }
+            )
+
+            // Only once the new ones exist, so nothing can arrive in the gap and
+            // fall back to the manifest's default channel.
+            CHANNELS_OLD.forEach { runCatching { manager.deleteNotificationChannel(it) } }
         }
     }
 }

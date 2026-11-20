@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.data.profile
 
+import android.util.Log
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.mutableStateMapOf
 import com.iqsocial.iq_message.data.remote.ApiResult
@@ -31,18 +32,44 @@ object PresenceRepository {
     /**
      * Asks the server about these accounts and keeps what it says.
      *
-     * Quiet about failure: there is no error state here and no screen shows one.
-     * Presence that cannot be fetched leaves the dot grey and the line absent, which
-     * is the same as what an account that hides it looks like - and that is the
-     * right answer, because the two really are indistinguishable from here.
+     * Quiet about failure *on screen*: there is no error state here and no screen
+     * shows one. Presence that cannot be fetched leaves the dot grey and the line
+     * absent, which is the same as what an account that hides it looks like - and
+     * that is the right answer, because the two really are indistinguishable from
+     * here.
+     *
+     * Not quiet in the log, though. Those two cases look identical from outside the
+     * app and have entirely different causes - one is a person's setting, the other
+     * is a route that is down - and with nothing said here the second is
+     * indistinguishable from the first for as long as it lasts.
      */
     suspend fun refresh(token: String?, uids: List<String>) {
         if (token.isNullOrBlank()) return
         when (val result = PresenceApi.get(token, uids)) {
-            is ApiResult.Success -> result.data.forEach { known[it.uid] = it }
-            is ApiResult.Failure -> Unit
+            is ApiResult.Success -> {
+                // Every line of the answer, not a count. The two states this has
+                // to tell apart - somebody offline, and somebody whose setting
+                // hides them - come back looking identical except for the numbers,
+                // so the numbers are what has to be in the log.
+                Log.i(TAG, "presence: ${result.data.size} answer(s) for ${uids.size} asked")
+                result.data.forEach {
+                    Log.i(
+                        TAG,
+                        "  ${it.uid}: online=${it.online} last_seen_at=${it.lastSeenAt}" +
+                            if (it.lastSeenAt == 0L) " (none given)" else ""
+                    )
+                    known[it.uid] = it
+                }
+                if (result.data.isEmpty()) {
+                    Log.i(TAG, "  asked about ${uids.joinToString()} and got nothing back")
+                }
+            }
+
+            is ApiResult.Failure -> Log.w(TAG, "presence unavailable: ${result.message}")
         }
     }
+
+    private const val TAG = "Presence"
 
     /**
      * Keeps what the socket just said.

@@ -30,8 +30,10 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.iqsocial.iq_message.MainActivity
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.push.MessageNotifications
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.remote.CallType
 import com.iqsocial.iq_message.ui.screens.ChatScreen
+import com.iqsocial.iq_message.ui.screens.ChatsScreen
 import com.iqsocial.iq_message.ui.theme.IQMessageTheme
 
 /**
@@ -55,8 +57,17 @@ object ChatWindow {
 
     private const val TAG = "ChatWindow"
 
-    /** Room above for the docked row of heads, and below for the app underneath. */
-    private const val PANEL_TOP_DP = 96
+    /**
+     * Room above for the docked row of heads, and below for the app underneath.
+     *
+     * The top gap is not a taste: it is the heads' own height, measured from where
+     * [ChatHeads.dock] puts them. Thirty-six down, seventy-two of head, seven of
+     * pointer - so the panel starts at a hundred and twenty and the three read as
+     * one column, head over arrow over window. Sized by eye at ninety-six it was
+     * eighteen too few, and the pointer and the bottom of every face were drawn
+     * across the chat's own header.
+     */
+    private const val PANEL_TOP_DP = 122
     private const val PANEL_BOTTOM_DP = 24
 
     /**
@@ -69,9 +80,43 @@ object ChatWindow {
     private var panel: View? = null
     private var host: OverlayHost? = null
 
-    /** Which conversation is open, or null when the panel is down. */
+    /**
+     * The panel's own window attributes, kept so its flags can be changed later.
+     *
+     * One flag needs it: `FLAG_SECURE`, which goes up and down as the panel moves
+     * between a chat with somebody who allows screenshots and one with somebody
+     * who does not. A window's flags can only be changed by handing its params
+     * back to the window manager, and they were a local that went out of scope the
+     * moment the window was up.
+     */
+    private var attrs: WindowManager.LayoutParams? = null
+
+    /** Whether the person currently being shown has asked not to be screenshotted. */
+    private var peerLock = false
+
+    /**
+     * Which conversation the panel is showing, or null for the list - and for a
+     * panel that is down.
+     *
+     * The two are told apart by [isOpen], and almost nothing needs to: the ring
+     * under a head, the suppressed preview and the toggle all ask "is this chat the
+     * one on screen", and at the list the honest answer is no.
+     */
     var showing: String? = null
         private set
+
+    /** Whether the panel is up at all, at either of its two levels. */
+    val isOpen: Boolean get() = panel != null
+
+    /**
+     * What the panel is drawing, which is the whole of its navigation.
+     *
+     * A bubble in Messenger is not one chat, it is a small Messenger: back out of a
+     * chat and the list of chats is behind it, back again and the bubble closes.
+     * That is the shape this follows, with one state and no stack - there are only
+     * two levels, and a stack for two levels is machinery for its own sake.
+     */
+    private val level = mutableStateOf<String?>(null)
 
     /**
      * Opens this chat, or closes it if it is the one already open.
@@ -85,7 +130,39 @@ object ChatWindow {
             close()
             return
         }
+        // Already up, on another chat or on the list: the panel stays and only what
+        // it shows changes. Tearing the window down and building it again for a
+        // chat that is one state away would throw away the composition, the
+        // keyboard and the scroll of a list that is about to come back.
+        if (isOpen) {
+            show(conversationId)
+            return
+        }
         open(context, conversationId)
+    }
+
+    /**
+     * Shows a chat in a panel that is already up.
+     *
+     * The ring under the heads follows, because which head the panel belongs to has
+     * just changed and the only thing that says so is that ring.
+     */
+    private fun show(conversationId: String) {
+        level.value = conversationId.takeIf { it.isNotBlank() }
+        showing = level.value
+        ChatHeads.refreshActive()
+    }
+
+    /**
+     * One level out: a chat gives way to the list, and the list closes the panel.
+     *
+     * The chat is left rather than closed, which is the behaviour being copied and
+     * the better one anyway: having read one message, the next thing wanted is
+     * usually the next conversation, and a bubble that shuts on every back makes
+     * that a second trip through the head.
+     */
+    private fun back() {
+        if (level.value != null) show("") else close()
     }
 
     fun open(context: Context, conversationId: String) {
@@ -94,6 +171,7 @@ object ChatWindow {
             return
         }
         close()
+        level.value = conversationId
 
         val app = context.applicationContext
         val manager = app.getSystemService(WindowManager::class.java) ?: return
@@ -125,7 +203,10 @@ object ChatWindow {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK &&
                     event.action == KeyEvent.ACTION_UP
                 ) {
-                    close()
+                    // Out of the chat first, into the list behind it; out of the
+                    // list second. One press, one level - the same as the app, and
+                    // the same as the bubble this is modelled on.
+                    back()
                     return true
                 }
                 return super.dispatchKeyEvent(event)
@@ -237,12 +318,28 @@ object ChatWindow {
                                         else PANEL_BOTTOM_DP.dp
                                     )
                             ) {
-                                ChatScreen(
-                                    conversationId = conversationId,
-                                    onBack = { close() },
-                                    onAudioCall = { handOver(app, it, CallType.AUDIO) },
-                                    onVideoCall = { handOver(app, it, CallType.VIDEO) }
-                                )
+                                val open = level.value
+                                if (open == null) {
+                                    // The list, which is what a bubble falls back
+                                    // to rather than closing. Starting a new
+                                    // conversation needs the people search and a
+                                    // picker, so that one goes to the app.
+                                    ChatsScreen(
+                                        onOpenChat = { show(it) },
+                                        onNewMessage = { openInApp(app, "") }
+                                    )
+                                } else {
+                                    ChatScreen(
+                                        // The one place that asks for a head: a
+                                        // chat opened from the panel's own list is
+                                        // one of its tabs, and a tab needs one.
+                                        floating = true,
+                                        conversationId = open,
+                                        onBack = { back() },
+                                        onAudioCall = { handOver(app, it, CallType.AUDIO) },
+                                        onVideoCall = { handOver(app, it, CallType.VIDEO) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -277,6 +374,13 @@ object ChatWindow {
             // No NOT_FOCUSABLE here, which is the difference from the heads: this
             // window takes key events, so the keyboard opens for it and back
             // reaches the view above.
+            //
+            // No FLAG_SECURE here any more. It used to be set from this account's
+            // own setting, which is the wrong account: the lock belongs to whoever
+            // is being *shown*, and that changes as the panel moves between chats.
+            // [secureForPeer] is how the screen inside says so, since `SecureScreen`
+            // cannot - it works by flagging an activity's window, and there is no
+            // activity behind this one.
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -301,6 +405,7 @@ object ChatWindow {
         windows = manager
         panel = view
         host = owner
+        attrs = params
         showing = conversationId
         // Above the panel, so the head that opened it can still be pressed to put it
         // away. Both are overlay windows and the later one wins, so the row is put
@@ -320,9 +425,39 @@ object ChatWindow {
         windows = null
         panel = null
         host = null
+        attrs = null
+        peerLock = false
         showing = null
+        level.value = null
         // The row goes back where the reader had put it.
         ChatHeads.undock()
+    }
+
+    /**
+     * Locks the panel against screenshots for the person it is showing.
+     *
+     * `SecureScreen` cannot do this one itself: it works by finding the activity
+     * behind the composition and flagging its window, and there is no activity
+     * behind this one. So the screen inside the panel says what it needs and the
+     * panel, which owns the window, does it.
+     *
+     * Only the peer decides. This account's own `allow_screenshot` says whether
+     * *other people* may screenshot it, and it is enforced on their phones - asking
+     * it here as well would be the reader's own setting stopping the reader.
+     */
+    fun secureForPeer(locked: Boolean) {
+        peerLock = locked
+        val manager = windows ?: return
+        val view = panel ?: return
+        val now = attrs ?: return
+        val secure = WindowManager.LayoutParams.FLAG_SECURE
+        val want =
+            if (peerLock) now.flags or secure
+            else now.flags and secure.inv()
+        if (want == now.flags) return
+        now.flags = want
+        runCatching { manager.updateViewLayout(view, now) }
+            .onFailure { Log.w(TAG, "Could not change the panel's screenshot lock", it) }
     }
 
     /**

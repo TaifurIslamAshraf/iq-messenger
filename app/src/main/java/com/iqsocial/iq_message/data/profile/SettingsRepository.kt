@@ -43,6 +43,20 @@ object SettingsRepository {
     val showActiveStatus: Boolean
         get() = settings?.showActiveStatus ?: true
 
+    /**
+     * Whether other people may screenshot this account's chats, calls and profile.
+     *
+     * Allowed until the server says otherwise - the same way round as the field
+     * itself, and the only honest default: a block this app has not been told about
+     * is a block that is not in force.
+     */
+    val allowScreenshot: Boolean
+        get() = settings?.allowScreenshot ?: true
+
+    /** Whether this account is told when somebody screenshots it. */
+    val notifyOnScreenshot: Boolean
+        get() = settings?.notifyOnScreenshot ?: true
+
     suspend fun load(token: String?) {
         if (token.isNullOrBlank()) {
             loaded = true
@@ -105,6 +119,52 @@ object SettingsRepository {
         if (show == settings?.showActiveStatus) return true
         saving = true
         val ok = when (val result = SettingsApi.setActiveStatus(token, show)) {
+            is ApiResult.Success -> {
+                settings = result.data
+                error = null
+                true
+            }
+            is ApiResult.Failure -> {
+                error = result.message
+                false
+            }
+        }
+        saving = false
+        return ok
+    }
+
+    /**
+     * Lets other people screenshot this account, or asks that they cannot.
+     *
+     * Not optimistic, like the two above and for the sharpest version of the same
+     * reason: a switch that slid to "blocked" before the server agreed would be
+     * showing a protection that nobody else has been told about yet.
+     */
+    suspend fun setAllowScreenshot(token: String?, allow: Boolean): Boolean {
+        if (token.isNullOrBlank()) return false
+        if (allow == settings?.allowScreenshot) return true
+        saving = true
+        val ok = when (val result = SettingsApi.setAllowScreenshot(token, allow)) {
+            is ApiResult.Success -> {
+                settings = result.data
+                error = null
+                true
+            }
+            is ApiResult.Failure -> {
+                error = result.message
+                false
+            }
+        }
+        saving = false
+        return ok
+    }
+
+    /** Asks to be told when somebody screenshots this account, or not to be. */
+    suspend fun setNotifyOnScreenshot(token: String?, notify: Boolean): Boolean {
+        if (token.isNullOrBlank()) return false
+        if (notify == settings?.notifyOnScreenshot) return true
+        saving = true
+        val ok = when (val result = SettingsApi.setNotifyOnScreenshot(token, notify)) {
             is ApiResult.Success -> {
                 settings = result.data
                 error = null

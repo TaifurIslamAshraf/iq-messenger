@@ -23,6 +23,17 @@ object ChatList {
     suspend fun stored(context: Context): List<ChatConversation> =
         ChatStore.of(context).chats().conversationsOnce().mapNotNull { it.toConversation() }
 
+    /**
+     * One of them, by id.
+     *
+     * For a chat opened with no connection: the screen asks the server who this is,
+     * and when the server cannot be asked, this is the answer it was given last
+     * time. Without it a thread drawn perfectly from the store sat under a header
+     * with no name and no face.
+     */
+    suspend fun stored(context: Context, conversationId: String): ChatConversation? =
+        ChatStore.of(context).chats().conversation(conversationId)?.toConversation()
+
     suspend fun store(context: Context, conversations: List<ChatConversation>) {
         if (conversations.isEmpty()) return
         ChatStore.of(context).chats().mergeConversations(conversations.map { it.toRow() })

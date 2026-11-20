@@ -2,6 +2,7 @@ package com.iqsocial.iq_message.data.media
 
 import android.content.Context
 import android.media.MediaRecorder
+import android.util.Log
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,7 +12,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
-import kotlin.math.log10
 
 /**
  * Records a voice message to a temporary file.
@@ -93,26 +93,6 @@ class VoiceRecorder(private val context: Context) {
         }
     }
 
-    /**
-     * Turns a raw amplitude into a bar height.
-     *
-     * **Decibels, not a straight scale.** `maxAmplitude` runs 0..32767 and ordinary
-     * speech into a phone sits somewhere around 2000-12000 of that, so mapping it
-     * linearly - which is what this did - squashed a whole sentence into the bottom
-     * third of the bar and drew every syllable at nearly the same height. Loudness
-     * is heard logarithmically, so it has to be drawn that way to look like what was
-     * said.
-     *
-     * [FLOOR_DB] is where a quiet room sits; anything below it is silence rather
-     * than a very short bar.
-     */
-    private fun loudness(amplitude: Int): Int {
-        if (amplitude <= 0) return 0
-        val db = 20.0 * log10(amplitude.toDouble() / MAX_AMPLITUDE)   // -90..0
-        if (db <= FLOOR_DB) return 0
-        return ((db - FLOOR_DB) / -FLOOR_DB * 100).toInt().coerceIn(0, 100)
-    }
-
     data class Recording(val file: File, val durationMs: Long, val waveform: List<Int>)
 
     /** Stops and returns the file, or null if it was too short to be a message. */
@@ -136,7 +116,20 @@ class VoiceRecorder(private val context: Context) {
             return null
         }
         val captured = synchronized(amplitudes) { amplitudes.toList() }
-        return Recording(file, duration, waveformOf(captured))
+        val bars = waveformOf(captured)
+        // Said out loud, because a waveform that comes out empty is invisible in
+        // every other way: the message still sends, still plays, still shows the
+        // right length, and draws the flat line meant for messages that never had a
+        // shape. The three numbers tell the three apart - no samples at all means
+        // the sampling loop never ran, samples with a peak of zero means this phone
+        // reports no amplitude, and bars of zero from a real peak means the floor
+        // in [loudness] is set above what was actually said.
+        Log.i(
+            TAG,
+            "voice ${duration}ms: ${captured.size} samples, " +
+                "peak=${captured.maxOrNull() ?: 0}, ${bars.size} bars"
+        )
+        return Recording(file, duration, bars)
     }
 
     /** Throws the recording away — used when the gesture is cancelled. */
@@ -152,47 +145,16 @@ class VoiceRecorder(private val context: Context) {
     }
 
     /**
-     * The bars the message is sent with.
-     *
-     * Three steps, and each one matters to whether the shape reads as speech:
-     *
-     * 1. **Peak, not mean, within a bar.** Averaging raw samples flattens the
-     *    consonants that give a waveform its texture; a bar should say how loud it
-     *    got, not how loud it was on average.
-     * 2. **Decibels** - see [loudness].
-     * 3. **Normalised to the recording's own peak**, so a message spoken quietly
-     *    still fills the bubble. The peak has to clear [QUIET_PEAK] first, or a
-     *    recording of a silent room would be amplified into a wall of noise.
+     * The bars, built by [VoiceShape] so that both ways of measuring a clip draw
+     * the same shape for the same words.
      */
-    internal fun waveformOf(raw: List<Int>): List<Int> {
-        // Empty, not a row of zeros. Zeros are a claim - that the recording was
-        // silent - and the sender cannot tell that from having captured nothing.
-        // The bubble draws its own placeholder for an absent waveform.
-        if (raw.isEmpty()) return emptyList()
-
-        val peaks = if (raw.size <= BARS) raw else {
-            val step = raw.size.toFloat() / BARS
-            (0 until BARS).map { i ->
-                val from = (i * step).toInt()
-                val to = ((i + 1) * step).toInt().coerceAtMost(raw.size)
-                if (from >= to) raw[from.coerceAtMost(raw.lastIndex)]
-                else raw.subList(from, to).max()
-            }
-        }
-
-        val levels = peaks.map { loudness(it) }
-        val loudest = levels.maxOrNull() ?: 0
-        // Nothing audible was captured, which is not the same as silence having
-        // been recorded - either way there is no shape worth sending.
-        if (loudest <= 0) return emptyList()
-        if (loudest < QUIET_PEAK) return levels
-        return levels.map { (it * 100 / loudest).coerceIn(0, 100) }
-    }
+    internal fun waveformOf(raw: List<Int>): List<Int> = VoiceShape.of(raw)
 
     companion object {
+        private const val TAG = "VoiceRecorder"
+
         /** Below this a press reads as a mis-tap, not a message. */
         const val MIN_MS = 700L
-        private const val BARS = 48
 
         /** Often enough that a two-second clip still has a shape. */
         private const val SAMPLE_MS = 60L
@@ -203,10 +165,5 @@ class VoiceRecorder(private val context: Context) {
         /** The range `MediaRecorder.maxAmplitude` reports. */
         private const val MAX_AMPLITUDE = 32767
 
-        /** Quieter than this is silence, not a very short bar. */
-        private const val FLOOR_DB = -50.0
-
-        /** A recording whose loudest bar is under this is not worth stretching. */
-        private const val QUIET_PEAK = 12
     }
 }

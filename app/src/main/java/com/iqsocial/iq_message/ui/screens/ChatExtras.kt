@@ -67,6 +67,8 @@ import com.iqsocial.iq_message.ui.theme.CrimsonTint
 import com.iqsocial.iq_message.ui.theme.FieldGrey
 import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.InkMuted
+import com.iqsocial.iq_message.ui.components.SecureScreen
+import com.iqsocial.iq_message.ui.components.peerAllowsScreenshot
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -867,6 +869,11 @@ fun PeerProfileSheet(
 ) {
     val d = IqTheme.dimens
     val scope = rememberCoroutineScope()
+
+    // Someone else's profile, which is the case the setting is written for - the
+    // server's own words are "read this before showing a person's profile".
+    SecureScreen(!peerAllowsScreenshot(peer?.uid, conversationId))
+
     // Held here and not read back from the conversation: the mute call returns
     // nothing to re-read, and waiting for the list to be fetched again would leave
     // the switch showing the old answer for as long as that took.

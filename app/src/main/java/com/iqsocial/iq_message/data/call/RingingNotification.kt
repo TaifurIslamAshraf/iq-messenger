@@ -8,13 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.drawable.IconCompat
 import com.iqsocial.iq_message.MainActivity
 import com.iqsocial.iq_message.R
 import com.iqsocial.iq_message.data.media.RemoteImage
@@ -60,7 +58,11 @@ object RingingNotification {
             .setName(name)
             .setKey(call.peer?.uid.orEmpty())
             .setImportant(true)
-            .apply { face(call)?.let { setIcon(IconCompat.createWithAdaptiveBitmap(it)) } }
+            // Cut round, and handed over as a plain bitmap rather than an adaptive
+            // one: an adaptive icon is masked into whatever shape the phone gives an
+            // app icon, which on a good many of them is a rounded square - so the
+            // caller arrived as a tile while every other picture of them is a circle.
+            .apply { CallFace.icon(app, face(call), name)?.let(::setIcon) }
             .build()
 
         val notification = NotificationCompat.Builder(app, if (silent) CHANNEL_QUIET else CHANNEL)
@@ -85,7 +87,31 @@ object RingingNotification {
             .setAutoCancel(false)
             // The whole screen when the phone is locked; a heads-up when it is not.
             .setFullScreenIntent(answerScreen(app), true)
+            // **It takes itself down.** Everything else that removes this - the call
+            // being answered, declined, cancelled or rung out - is this app doing
+            // the removing, and all of it needs the process to still be alive. A
+            // process killed while the phone was ringing left a call notification
+            // on the lock screen for ever: ongoing, so it could not be swiped away,
+            // for a call that had been over for hours, with an Answer button that
+            // answered nothing. The system removing it on time needs nobody alive.
+            //
+            // The server's own deadline, so the notice and the call agree about when
+            // it stops being a call; a minute when there is none, which is longer
+            // than any ring and short enough not to be a leftover.
+            .setTimeoutAfter(
+                (call.ringExpiresAt - System.currentTimeMillis())
+                    .takeIf { it > 0L } ?: DEFAULT_RING_MS
+            )
             .build()
+
+        // Asked before posting rather than only caught afterwards. The catch stays -
+        // a refused notification must never take a call down - but without the check
+        // the one thing standing between a ringing phone and a crash was an
+        // exception handler, and that is a thin place to keep a guarantee.
+        val mayPost = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!mayPost) return
 
         runCatching { NotificationManagerCompat.from(app).notify(ID, notification) }
     }
@@ -179,7 +205,7 @@ object RingingNotification {
         ).apply {
             description = "Rings when somebody calls"
             setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                com.iqsocial.iq_message.data.media.Tones.ringtone(context),
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -191,10 +217,24 @@ object RingingNotification {
             lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         }
         manager.createNotificationChannel(channel)
+        runCatching { manager.deleteNotificationChannel(CHANNEL_OLD) }
     }
 
+    /** Longer than any ring the server sets, short enough not to be a leftover. */
+    private const val DEFAULT_RING_MS = 60_000L
+
     private const val ANSWER_REQUEST = 7302
-    private const val CHANNEL = "calls_incoming"
+    /**
+     * Version two of the channel, because the ring changed.
+     *
+     * A channel's sound is fixed the moment Android first sees it: later calls to
+     * `createNotificationChannel` with the same id keep whatever the person has
+     * set - which is the right rule, and it means a new sound needs a new id. The
+     * old one is deleted alongside, or it would sit in the phone's settings as a
+     * second "Incoming calls" that no longer rings for anything.
+     */
+    private const val CHANNEL = "calls_incoming_v2"
+    private const val CHANNEL_OLD = "calls_incoming"
     private const val CHANNEL_QUIET = "calls_incoming_quiet"
     private const val ID = 4
 }

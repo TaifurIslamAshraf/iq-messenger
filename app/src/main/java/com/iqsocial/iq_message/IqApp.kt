@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message
 
+import android.net.Uri
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -52,13 +53,16 @@ import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.KnownPeople
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
 import com.iqsocial.iq_message.data.media.MediaCache
+import com.iqsocial.iq_message.data.media.RemoteImage
 import com.iqsocial.iq_message.data.media.UploadQueue
 import com.iqsocial.iq_message.data.net.Reachability
 import com.iqsocial.iq_message.data.media.VoiceWaveforms
 import com.iqsocial.iq_message.data.overlay.ChatHeads
 import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.data.profile.PeerPrivacy
 import com.iqsocial.iq_message.data.profile.PresenceRepository
 import com.iqsocial.iq_message.data.profile.SettingsRepository
+import com.iqsocial.iq_message.data.privacy.ScreenshotAlerts
 import com.iqsocial.iq_message.data.push.IqMessagingService
 import com.iqsocial.iq_message.data.push.PushTokens
 import com.iqsocial.iq_message.data.push.MessageNotifications
@@ -79,12 +83,19 @@ import com.iqsocial.iq_message.ui.screens.CallProblem
 import com.iqsocial.iq_message.ui.screens.CallsScreen
 import com.iqsocial.iq_message.ui.screens.ChatScreen
 import com.iqsocial.iq_message.ui.screens.ChatsScreen
+import com.iqsocial.iq_message.ui.screens.EditProfileScreen
+import com.iqsocial.iq_message.data.remote.ProfileImage
 import com.iqsocial.iq_message.ui.screens.ForgotPasswordScreen
+import com.iqsocial.iq_message.ui.screens.ImageCropScreen
+import com.iqsocial.iq_message.ui.screens.NotificationsScreen
+import com.iqsocial.iq_message.ui.screens.PrivacyScreen
 import com.iqsocial.iq_message.ui.screens.IncomingCallScreen
 import com.iqsocial.iq_message.ui.screens.LoginScreen
 import com.iqsocial.iq_message.ui.screens.OngoingCallBar
 import com.iqsocial.iq_message.ui.screens.PeopleScreen
 import com.iqsocial.iq_message.ui.screens.PeopleSearchScreen
+import com.iqsocial.iq_message.ui.screens.PersonScreen
+import com.iqsocial.iq_message.ui.screens.QrScreen
 import com.iqsocial.iq_message.ui.screens.ProfileScreen
 import com.iqsocial.iq_message.ui.screens.RewardsScreen
 import com.iqsocial.iq_message.ui.screens.SignupScreen
@@ -114,6 +125,44 @@ sealed interface Route {
     data object Home : Route
     data object PeopleSearch : Route
     data class Chat(val conversationId: String) : Route
+
+    /**
+     * The settings pages that change something.
+     *
+     * Screens rather than sheets over the profile tab: each one edits the account,
+     * and the back gesture, the title and the full height are worth more than the
+     * half-screen a popup leaves. They carry nothing, because what they edit is
+     * held by [MeRepository] and would go stale in a route.
+     */
+    /** This account's QR code, and reading somebody else's. */
+    data object QrCode : Route
+
+    data object EditProfile : Route
+    data object Privacy : Route
+    data object Notifications : Route
+
+    /**
+     * Cropping a picture that has just been chosen, before it goes anywhere.
+     *
+     * The only settings route that carries anything, and it carries the least it
+     * can: the picked `Uri` as text and which of the two pictures it is for. The
+     * picture itself is not in the route - a bitmap in a navigation stack is a
+     * bitmap kept alive by the stack.
+     */
+    data class CropPicture(val uri: String, val cover: Boolean) : Route
+
+    /**
+     * Somebody else's profile.
+     *
+     * Carries the name and picture the screen that opened it already had, so the
+     * profile is drawn the instant it opens rather than after a request. They are
+     * a starting point, not the answer: `GET /v1/people/{uid}` replaces them.
+     */
+    data class PersonProfile(
+        val uid: String,
+        val name: String = "",
+        val photo: String = ""
+    ) : Route
     /**
      * The call screens carry nothing.
      *
@@ -189,7 +238,11 @@ fun IqApp(
     /** A conversation a notification asked for, or null. */
     openConversation: String? = null,
     /** Called once it has been opened, so the same tap is not acted on twice. */
-    onConversationOpened: () -> Unit = {}
+    onConversationOpened: () -> Unit = {},
+    /** Set when the running call's notification was tapped. */
+    openCall: Boolean = false,
+    /** Called once the call screen is up, for the same reason. */
+    onCallOpened: () -> Unit = {}
 ) {
     // A stored token skips straight past the auth screens on relaunch.
     val auth = rememberAuthRepository()
@@ -207,6 +260,9 @@ fun IqApp(
     // fetch it again.
     LaunchedEffect(Unit) {
         MediaCache.cacheDir = context.applicationContext.cacheDir
+        // Faces and link pictures, kept the same way, so a cold start with no
+        // connection draws them instead of initials.
+        RemoteImage.cacheDir = context.applicationContext.cacheDir
         VoiceWaveforms.init(context)
         CallEngine.init(context)
         CallCenter.init(context)
@@ -256,12 +312,22 @@ fun IqApp(
             else -> Route.AudioCall
         }
 
+        // A ringing call cannot be answered in a thumbnail: a floating window passes
+        // no touch to what is drawn in it, so Accept there is a picture of a button.
+        // One that arrives while the window is up takes the screen back first, and
+        // the routing below then puts it on it.
+        if (wanted == Route.IncomingCall && CallWindow.inPip) {
+            context.activity()?.leaveCallPip()
+        }
+
         when {
-            wanted == null -> if (onCall) {
-                // Out of the thumbnail first. The screen under it is the chat list,
-                // and leaving that in a floating window is the app looking broken.
+            wanted == null -> {
+                // Out of the thumbnail first, and whatever is in it - not only when
+                // a call screen was up. A call can be put aside and then followed
+                // out of the app, which leaves a chat in the window; when the call
+                // ends there is then nothing left to float but the app itself.
                 if (CallWindow.inPip) context.activity()?.leaveCallPip()
-                nav.pop()
+                if (onCall) nav.pop()
             }
 
             nav.current == wanted -> Unit
@@ -346,12 +412,31 @@ fun IqApp(
      * repeat, and remembering what was last sent would mean trusting this app's
      * memory over Firebase's answer - which is the thing that goes stale.
      */
+    /**
+     * The account's own settings, at launch rather than when Settings is opened.
+     *
+     * One of them is `allow_screenshot`, which decides whether this phone locks its
+     * own window - and until this effect existed, nothing fetched the settings
+     * until the profile tab was visited. On a fresh launch the repository held
+     * null, null reads as the permissive default, and a reader who had turned
+     * screenshots off found them working again every time the app was restarted.
+     */
+    LaunchedEffect(session.token) {
+        if (!session.token.isNullOrBlank()) SettingsRepository.load(session.token)
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, session.token) {
         fun send() {
             if (session.token.isNullOrBlank()) return
             IqMessagingService.ensureChannels(context)
             PushTokens.register(context)
+            // And anything that happened while this phone was not listening. A
+            // push is not a delivery guarantee - the phone can be off, out of
+            // signal, or have notifications turned off at the system level - so
+            // the list is read when the app comes forward and anything newer
+            // than the last alert shown is shown now.
+            scope.launch { runCatching { ScreenshotAlerts.catchUp(context) } }
         }
 
         // Signing in happens *after* ON_START, so waiting for the next one would
@@ -420,6 +505,28 @@ fun IqApp(
     }
 
     /**
+     * The running call's notification was tapped: show the call.
+     *
+     * Keyed on the call as well as on the tap, because the two can arrive in either
+     * order. A notification tapped while the app was not running starts it, and the
+     * call this phone is in may not be known yet when the first composition runs -
+     * so the request waits here until there is a call to put on screen, rather than
+     * being spent on nothing.
+     *
+     * Clearing [setAside] is what makes it stick: without it the call is still
+     * marked as one the person stepped away from, and the routing effect would read
+     * the screen as unwanted and take it away again.
+     */
+    LaunchedEffect(openCall, live?.id, live?.type) {
+        if (!openCall) return@LaunchedEffect
+        val call = live ?: return@LaunchedEffect
+        setAside = null
+        val wanted = if (call.type == CallType.VIDEO) Route.VideoCall else Route.AudioCall
+        if (nav.current != wanted) nav.push(wanted)
+        onCallOpened()
+    }
+
+    /**
      * Which route is up, for the half of the window logic the activity owns.
      *
      * `onUserLeaveHint` fires for every way out of the app and the activity has no
@@ -434,42 +541,116 @@ fun IqApp(
         // should not keep the square window a voice call was given.
         CallWindow.showing(minimisable, nav.current is Route.VideoCall || hasPicture)
     }
+    /**
+     * The other half of what the activity needs: that there is a call at all.
+     *
+     * Kept apart from the route above because the two disagree exactly when it
+     * matters - a call put aside is running with a chat in front of it. A call still
+     * ringing to be answered is left out: that one belongs on a full screen or in a
+     * notification, and a thumbnail of it offers no way to answer.
+     */
+    LaunchedEffect(live?.id, live?.status, live?.isIncoming) {
+        CallWindow.inCall(
+            live != null && !(live.isIncoming && live.status == CallStatus.RINGING)
+        )
+    }
+
     DisposableEffect(Unit) {
-        onDispose { CallWindow.showing(false) }
+        onDispose {
+            CallWindow.showing(false)
+            CallWindow.inCall(false)
+        }
     }
 
     /**
-     * Keeps the floating window's buttons honest.
+     * Keeps the floating window's buttons honest, and arms it while there is a call.
      *
      * The actions are a snapshot taken when they were built, so muting from the
      * window would otherwise leave a "Mute" button over an already-muted
-     * microphone. Reading both flags here is what makes this re-run when either
+     * microphone. Reading every flag here is what makes this re-run when any of them
      * changes - including when the change came from the window's own buttons.
+     *
+     * No longer only while the window is up, because this is also what puts it up:
+     * from Android 12 a window armed in advance is shrunk by the system as part of
+     * the gesture out of the app, rather than appearing in the corner after it. That
+     * has to be set while the call is still on screen - and unset the moment it
+     * ends, which is why this runs with no call too and sends `false`.
      */
-    LaunchedEffect(CallWindow.inPip, CallEngine.micOn, CallAudio.route) {
-        if (CallWindow.inPip) context.activity()?.updateCallPipParams()
+    LaunchedEffect(
+        CallWindow.inPip,
+        CallWindow.callOnScreen,
+        CallWindow.callRunning,
+        CallWindow.video,
+        CallEngine.micOn,
+        CallAudio.route
+    ) {
+        context.activity()?.updateCallPipParams(
+            autoEnter = CallWindow.callOnScreen || CallWindow.callRunning
+        )
     }
 
     /**
-     * Back, during a call, shrinks rather than leaves.
+     * Back, during a call, never leaves the call behind.
      *
-     * Popping was the old behaviour and it is the wrong shape for a call: the call
-     * carried on, correctly, but with nothing on screen to say so and no way back to
-     * it except the notification. Shrinking keeps it in the corner, which is what
-     * the other messengers do and what was asked for.
+     * Two cases, and they are the same promise answered twice. On the call screen it
+     * floats the call and steps out of that screen. Anywhere else in the app, with
+     * the call running behind the strip at the top, it floats the call rather than
+     * letting back carry the app out of sight - which is the home button's behaviour,
+     * reached by the other way out.
      *
-     * The route is deliberately **not** popped. The window still holds this
-     * composition, so tapping it to expand finds the call screen where it was left -
-     * where a pop would expand onto whatever was underneath.
+     * Both halves of the first, and the second is the one that is easy to leave out.
+     * Shrinking
+     * alone keeps the call in the corner but leaves the call screen standing in the
+     * app behind it, so coming back - by the window, by the app's own icon - lands
+     * on a call screen nobody asked to see again. The step back is what makes the
+     * window a way of *putting the call aside*: behind it the app is where it was
+     * before the call, and [OngoingCallBar] is how the call is picked up again.
      *
-     * If the phone cannot do it - Android 7, or a device without the feature -
-     * `enterCallPip` says so and the old behaviour stands rather than nothing
-     * happening at all.
+     * So the pop happens whether or not the window went up. On a phone that cannot
+     * float one - Android 7, or a device without the feature - this is exactly what
+     * the minimise button does, which is the right thing to degrade to.
+     *
+     * The window itself is asked for **first**. The system takes the shrinking
+     * activity as it finds it, and finding it already showing the screen underneath
+     * would animate that into the corner instead of the call.
      */
-    BackHandler(enabled = nav.canGoBack) {
-        // Back out of a call the same way the minimise button does: into the app,
-        // with the call still running behind the bar.
-        if (minimisable && live != null) setAside = live.id
+    // Enabled during a call even with nothing to go back to. A call answered from a
+    // notification on a cold start can be the only thing on the stack, and left to
+    // the system that back would finish the activity - which is the one exit that
+    // never reaches `onUserLeaveHint` either, so the call would go with no window
+    // and no screen.
+    BackHandler(enabled = nav.canGoBack || CallWindow.callRunning) {
+        if (minimisable && live != null) {
+            context.activity()?.enterCallPip()
+            // Put aside by name, so the routing effect reads this as a call the
+            // person stepped away from rather than one it has yet to show.
+            setAside = live?.id
+            nav.pop()
+            return@BackHandler
+        }
+
+        // Back out of the app, with a call still running behind the strip at the
+        // top. Not the call screen - that is the case above - but the one after it:
+        // the call was put aside, the person carried on reading, and now they are
+        // leaving. Which is the home button's case exactly, and the home button
+        // floats the call, so this does too rather than letting the call go off
+        // screen with nothing to bring it back.
+        //
+        // Only when there is nowhere left to go back to. Back inside the app is
+        // still back inside the app: during a call a chat still returns to the
+        // list, or the gesture would stop being navigation for as long as somebody
+        // was talking.
+        if (!nav.canGoBack && CallWindow.callRunning) {
+            // Failing that - Android 7, or a phone with no picture-in-picture - the
+            // app still goes to the background, because that is what back meant.
+            // What must not happen is nothing at all: a gesture that does nothing
+            // reads as an app that has frozen mid-call.
+            if (context.activity()?.enterCallPip() != true) {
+                context.activity()?.moveTaskToBack(true)
+            }
+            return@BackHandler
+        }
+
         nav.pop()
     }
 
@@ -478,9 +659,20 @@ fun IqApp(
      *
      * Asked once because two things need the answer: whether to draw the strip, and
      * whether the column it sits in should take the status bar for it.
+     *
+     * A call that is still ringing counts, as long as it is one being *placed*. The
+     * test used to be "not ringing", which quietly meant that stepping out of an
+     * outgoing call before it was answered left nothing at all on screen: the call
+     * was dialling, the other phone was ringing, and this one showed no sign of it.
+     * The strip already knows what to say in that state - it reads "Calling" until
+     * there is a duration to show instead.
+     *
+     * What stays out is an *incoming* call still ringing. That one is not a call in
+     * progress to be returned to, it is a question waiting for an answer, and it has
+     * a screen and a notification of its own to ask it with.
      */
     val barUp = live != null && !minimisable && !CallWindow.inPip &&
-        live.status != CallStatus.RINGING
+        !(live.isIncoming && live.status == CallStatus.RINGING)
 
     /**
      * The strip above the screen, in space of its own.
@@ -571,6 +763,22 @@ fun IqApp(
                 .background(if (nav.current.isCall) CallBlack else Color.White),
             label = "route"
         ) { route ->
+            /**
+             * In a thumbnail, what is drawn is the call, not the call screen shrunk:
+             * a different, much smaller thing. Asked here rather than inside each
+             * call screen so that neither has to know the difference.
+             *
+             * `isCall` and not simply [CallWindow.inPip], because the route and the
+             * window no longer always agree - a call can be put aside and then
+             * followed out of the app, which floats a window with a *chat* in it.
+             * That case is handled at the end of this file instead, over the screen
+             * rather than in place of it; see there for why the difference matters.
+             */
+            if (CallWindow.inPip && route.isCall) {
+                CallPipScreen()
+                return@AnimatedContent
+            }
+
             when (route) {
                 Route.Login -> LoginScreen(
                     onLoggedIn = { nav.replaceAll(Route.Home) },
@@ -599,6 +807,18 @@ fun IqApp(
                         onAudioCall = { CallCenter.start(context, it, CallType.AUDIO) },
                         onVideoCall = { CallCenter.start(context, it, CallType.VIDEO) },
                         onNewMessage = { nav.push(Route.PeopleSearch) },
+                        onEditProfile = { nav.push(Route.EditProfile) },
+                        onQrCode = { nav.push(Route.QrCode) },
+                        onCrop = { picked, kind ->
+                            nav.push(
+                                Route.CropPicture(
+                                    picked.toString(),
+                                    kind == ProfileImage.COVER
+                                )
+                            )
+                        },
+                        onPrivacy = { nav.push(Route.Privacy) },
+                        onNotifications = { nav.push(Route.Notifications) },
                         onLogOut = {
                             // Before the session goes: unregistering needs the token it
                             // is about to discard, and without it this account keeps
@@ -616,6 +836,10 @@ fun IqApp(
                             // Who was online while this account was signed in is
                             // that account's business and nobody else's.
                             PresenceRepository.clear()
+                            // And what the people this account talked to allow it
+                            // to screenshot. A privacy answer belongs to the pair
+                            // of accounts it was asked about, not to the phone.
+                            PeerPrivacy.forget()
                             ChatRepository.clear()
                             // And the copy on disk. Everything above empties memory;
                             // this account's messages would otherwise still be here
@@ -625,6 +849,16 @@ fun IqApp(
                             // that is about to be emptied by other means, for an
                             // account that will not be signed in when it runs.
                             OutboxWork.cancel(context)
+                            // And the three places an account's content lives
+                            // outside that database: pictures decoded to disk,
+                            // waveforms this phone measured, and the bytes of
+                            // anything still on its way up. Emptying the tables and
+                            // leaving these would be tidying the room and locking
+                            // the contents in a drawer.
+                            MediaCache.clear()
+                            RemoteImage.clear()
+                            VoiceWaveforms.clear()
+                            UploadQueue.clear(context)
                             KnownPeople.clear()
                             ChatHeads.clear()
                             ChatSocket.disconnect()
@@ -634,9 +868,57 @@ fun IqApp(
                     )
 
                     // Signing in is the moment the address book becomes useful, so the
-                    // ask happens here rather than behind the People tab.
-                    ContactsAccessGate()
+                    // ask happens here rather than behind the People tab. Behind
+                    // `inFront` like the other three: it is a dialog, and the chat
+                    // list is what a call ringing on a locked phone composes on its
+                    // way to the call screen - where a dialog has no window to open
+                    // in and crashes rather than appearing.
+                    if (inFront) ContactsAccessGate()
                 }
+
+                Route.QrCode -> QrScreen(
+                    onBack = { nav.pop() },
+                    onOpenChat = { conversationId ->
+                        // Away first: the code screen has done its errand, and
+                        // coming back to it from the chat would be coming back to
+                        // a code nobody needs to see again.
+                        nav.pop()
+                        nav.push(Route.Chat(conversationId))
+                    }
+                )
+
+                Route.EditProfile -> EditProfileScreen(
+                    onBack = { nav.pop() },
+                    onCrop = { picked, kind ->
+                        nav.push(
+                            Route.CropPicture(
+                                picked.toString(),
+                                kind == ProfileImage.COVER
+                            )
+                        )
+                    }
+                )
+
+                is Route.CropPicture -> {
+                    val kind =
+                        if (route.cover) ProfileImage.COVER else ProfileImage.PICTURE
+                    ImageCropScreen(
+                        uri = Uri.parse(route.uri),
+                        kind = kind,
+                        onCancel = { nav.pop() },
+                        onDone = { cropped ->
+                            // Away first, then the upload: it carries on in the
+                            // repository's own scope, and the screen it was started
+                            // from has nothing left to say about it.
+                            nav.pop()
+                            MeRepository.uploadImage(session.token, kind, cropped)
+                        }
+                    )
+                }
+
+                Route.Privacy -> PrivacyScreen(onBack = { nav.pop() })
+
+                Route.Notifications -> NotificationsScreen(onBack = { nav.pop() })
 
                 Route.PeopleSearch -> PeopleSearchScreen(
                     onBack = { nav.pop() },
@@ -646,9 +928,28 @@ fun IqApp(
                     }
                 )
 
+                is Route.PersonProfile -> PersonScreen(
+                    uid = route.uid,
+                    knownName = route.name,
+                    knownPhoto = route.photo,
+                    onBack = { nav.pop() },
+                    onAudioCall = { CallCenter.start(context, it, CallType.AUDIO) },
+                    onVideoCall = { CallCenter.start(context, it, CallType.VIDEO) }
+                )
+
                 is Route.Chat -> ChatScreen(
                     conversationId = route.conversationId,
                     onBack = { nav.pop() },
+                    onOpenProfile = { uid ->
+                        val known = KnownPeople.of(route.conversationId)
+                        nav.push(
+                            Route.PersonProfile(
+                                uid = uid,
+                                name = known?.fullname.orEmpty(),
+                                photo = known?.profilePicture.orEmpty()
+                            )
+                        )
+                    },
                     onAudioCall = { CallCenter.start(context, it, CallType.AUDIO) },
                     onVideoCall = { CallCenter.start(context, it, CallType.VIDEO) }
                 )
@@ -661,9 +962,9 @@ fun IqApp(
                 )
 
                 // The window is a thumbnail, so what goes in it is not the call screen
-                // shrunk - it is a different, much smaller thing. Checked here rather
-                // than inside each screen so neither has to know the difference.
-                Route.VideoCall -> if (CallWindow.inPip) CallPipScreen() else VideoCallScreen(
+                // shrunk - it is a different, much smaller thing. That choice is made
+                // above, for every route, so neither screen here has to know about it.
+                Route.VideoCall -> VideoCallScreen(
                     onMinimize = { minimise(nav, { setAside = it }, live?.id) },
                     onEnd = { CallCenter.end(context) }
                 )
@@ -671,13 +972,13 @@ fun IqApp(
                 // A voice call with a camera on - either end's - is a video call, and
                 // is drawn as one. The route does not change: what kind of call it is is
                 // the server's word, and this is about what there is to show.
-                Route.AudioCall -> when {
-                    CallWindow.inPip -> CallPipScreen()
-                    hasPicture -> VideoCallScreen(
+                Route.AudioCall -> if (hasPicture) {
+                    VideoCallScreen(
                         onMinimize = { minimise(nav, { setAside = it }, live?.id) },
                         onEnd = { CallCenter.end(context) }
                     )
-                    else -> AudioCallScreen(
+                } else {
+                    AudioCallScreen(
                         onMinimize = { minimise(nav, { setAside = it }, live?.id) },
                         onEnd = { CallCenter.end(context) }
                     )
@@ -696,9 +997,22 @@ fun IqApp(
      * field no one asked for.
      *
      * Over everything, because it is the answer to something just attempted.
+     *
+     * Behind `inFront` with the permission prompts, and for the harder reason. This
+     * is a `Dialog`, and a dialog needs the activity's window to hang from. The one
+     * moment a call is most likely to fail is the one where there is no window to
+     * hang it from: a ringing call on a locked phone, which starts the activity
+     * behind the keyguard. Putting a dialog up there throws `BadTokenException` -
+     * "token null is not valid; is your activity running?" - and takes the app down,
+     * with the call and the ringing notification still on the lock screen.
+     *
+     * Nothing is lost by waiting. The reason is held in [CallCenter.error] until
+     * something reads it, so it is shown the moment there is somebody to show it to.
      */
-    CallCenter.error?.let { why ->
-        CallProblem(why) { CallCenter.dismissError() }
+    if (inFront) {
+        CallCenter.error?.let { why ->
+            CallProblem(why) { CallCenter.dismissError() }
+        }
     }
 
     // A second call, over the one in progress.
@@ -716,25 +1030,38 @@ fun IqApp(
             )
         }
     }
+
+    /**
+     * A call put aside, in a window, with the app carrying on behind it.
+     *
+     * The ordinary case rather than the odd one: back during a call steps out of the
+     * call screen as it floats the window, so by the time there is a window the
+     * route underneath is a chat or the list. The same holds for a call minimised by
+     * the button and then followed out of the app.
+     *
+     * The window belongs to the call, so the call is what fills it - but the screen
+     * it shrank from is a chat, and this is drawn **over** that screen rather than
+     * in place of it. In place of it would take the chat out of the composition, and
+     * everything a screen holds in `remember` - the half-written message most of
+     * all - goes with it. A draft lost for pressing home during a call is not a
+     * trade worth making for a few centimetres of window nobody can see behind.
+     *
+     * Last, with the other overlays, which is what puts it on top: this composable
+     * has no container of its own, so its children stack in the order written.
+     */
+    if (CallWindow.inPip && !nav.current.isCall) CallPipScreen()
 }
 
 /**
- * What the minimise button does: the same as back during a call.
+ * What the minimise button does: steps out of the call screen and into the app.
  *
- * Kept together so the button and the gesture cannot drift apart - they are one
- * action with two ways of asking for it.
- */
-/**
- * Steps out of the call screen and back into the app.
+ * The same step back as the gesture, without the floating window. The button is
+ * pressed to reach the app - a message to read, something to look up - and the app
+ * is right there, so a window over it would only cover what was being reached for.
+ * Back means leaving, and leaving is when the call needs something to travel in.
  *
- * It used to shrink the whole app into a floating window instead, which keeps the
- * call in view and takes everything else away - so during a call there was no way to
- * read a message or look anything up. The window is the right answer for *leaving*
- * the app, which `onUserLeaveHint` still handles; it is the wrong one for staying in
- * it.
- *
- * The call is not left behind: [OngoingCallBar] sits above whatever is underneath
- * and comes straight back here.
+ * The call is not left behind either way: [OngoingCallBar] sits above whatever is
+ * underneath and comes straight back here.
  */
 private fun minimise(nav: Navigator, setAside: (String?) -> Unit, callId: String?) {
     setAside(callId)
@@ -766,6 +1093,11 @@ private fun HomeShell(
     onAudioCall: (String) -> Unit,
     onVideoCall: (String) -> Unit,
     onNewMessage: () -> Unit,
+    onEditProfile: () -> Unit,
+    onQrCode: () -> Unit,
+    onCrop: (Uri, ProfileImage) -> Unit,
+    onPrivacy: () -> Unit,
+    onNotifications: () -> Unit,
     onLogOut: () -> Unit
 ) {
     // Same reason as the chat screen: the window keeps its full height when the
@@ -800,7 +1132,12 @@ private fun HomeShell(
 
                 HomeTab.Settings -> ProfileScreen(
                     onBack = { onTabChange(HomeTab.Chats) },
-                    onLogOut = onLogOut
+                    onLogOut = onLogOut,
+                    onEditProfile = onEditProfile,
+                    onQrCode = onQrCode,
+                    onCrop = onCrop,
+                    onPrivacy = onPrivacy,
+                    onNotifications = onNotifications
                 )
             }
         }

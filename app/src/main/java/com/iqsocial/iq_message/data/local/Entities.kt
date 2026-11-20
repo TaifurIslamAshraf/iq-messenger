@@ -165,6 +165,15 @@ data class UploadRow(
     val kind: String,
     /** Shape of the picture, so the bubble is the right size before it is sent. */
     val aspect: Float,
+    /**
+     * Whether the photo goes up as it was taken.
+     *
+     * Stored rather than held in memory because it is decided when the picture is
+     * picked and used when it is prepared, and those are now two different moments -
+     * possibly on two sides of the app being killed. A toggle flipped in between
+     * must not change what this one sends.
+     */
+    val hd: Boolean,
     val durationMs: Long,
     /** Voice only: the measured bars, as a JSON array. */
     val waveform: String,

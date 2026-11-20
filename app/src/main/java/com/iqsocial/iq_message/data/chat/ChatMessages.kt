@@ -5,7 +5,10 @@ import com.iqsocial.iq_message.data.local.ChatStore
 import com.iqsocial.iq_message.data.local.MessageRow
 import com.iqsocial.iq_message.data.local.SendState
 import com.iqsocial.iq_message.data.remote.ChatMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,11 +30,49 @@ import com.iqsocial.iq_message.data.remote.string
  */
 object ChatMessages {
 
-    /** Oldest first, as the thread is drawn, and re-emitted on every write. */
-    fun thread(context: Context, conversationId: String): Flow<List<ChatMessage>> =
-        ChatStore.of(context).chats().thread(conversationId).map { rows ->
-            rows.map { it.toMessage() }
-        }
+    /**
+     * Oldest first, as the thread is drawn, and re-emitted on every write.
+     *
+     * **`flowOn` is not decoration here.** A screen collects this with
+     * `collectAsState`, which collects in the composition's context - the main
+     * thread - and a `map` with nothing dispatching it runs where it is collected.
+     * So every row of the whole conversation was being turned into a message on
+     * the main thread, and [toMessage] parses a JSON payload per row: opening a
+     * chat with a few hundred messages in it stalled for about a second, which the
+     * frame counter reported as
+     *
+     *     Choreographer: Skipped 65 frames!
+     *     OpenGLRenderer: Davey! duration=1291ms
+     *
+     * Moved to IO, the database read and the parsing happen off the main thread and
+     * the list arrives finished.
+     *
+     * Conflated as well, because a write is rarely one row: storing a page of fifty
+     * messages emits as they land, and only the last of those lists is worth
+     * drawing.
+     */
+    fun thread(
+        context: Context,
+        conversationId: String,
+        limit: Int = PAGE
+    ): Flow<List<ChatMessage>> =
+        ChatStore.of(context).chats().threadTail(conversationId, limit)
+            // Read newest first so the limit means the end of the conversation,
+            // and turned round here so the screen gets what it draws: oldest
+            // first, with the newest at the bottom.
+            .map { rows -> rows.asReversed().map { it.toMessage() } }
+            .flowOn(Dispatchers.IO)
+            .conflate()
+
+    /**
+     * How many messages a screen opens with, and grows by.
+     *
+     * Twenty-five is about a screenful and a half on a tall phone: enough that the
+     * thread looks like a thread before anything else arrives, few enough that the
+     * work of opening is the same whether the conversation is a week old or three
+     * years old.
+     */
+    const val PAGE = 25
 
     suspend fun store(context: Context, messages: List<ChatMessage>) {
         if (messages.isEmpty()) return

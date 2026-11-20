@@ -12,6 +12,7 @@ import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatMessage
 import com.iqsocial.iq_message.data.remote.ChatPerson
+import com.iqsocial.iq_message.data.privacy.ScreenshotAlerts
 import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.data.remote.NotificationPreview
@@ -40,6 +41,11 @@ import kotlinx.coroutines.launch
  */
 object SocketAlerts {
 
+    // The screenshot alert is shown from here rather than from the socket itself
+    // for the same reason messages are: the socket has no context to draw a
+    // notification with, and this is the thing that does.
+
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var listening: Job? = null
 
@@ -59,6 +65,9 @@ object SocketAlerts {
                 // after it would go unannounced until the app was restarted.
                 if (event is ChatSocket.Event.New) {
                     runCatching { announce(app, event.message) }
+                }
+                if (event is ChatSocket.Event.ScreenshotSeen) {
+                    runCatching { ScreenshotAlerts.live(app, event.payload) }
                 }
             }
         }

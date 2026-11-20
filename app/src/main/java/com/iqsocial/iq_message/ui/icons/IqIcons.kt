@@ -606,6 +606,29 @@ object IqIcons {
 
     val Star = icon("Star") { fill { star() } }
 
+    /**
+     * A four-pointed star with a small one beside it: the mark every camera app
+     * uses for "make the picture nicer", and the one thing a plain star does not
+     * say - a star is a favourite. The sides are pulled in towards the centre, so
+     * it reads as a glint rather than as a child's drawing of a star.
+     */
+    private fun PathBuilder.sparkle(cx: Float, cy: Float, r: Float) {
+        val w = r * 0.3f
+        moveTo(cx, cy - r)
+        curveTo(cx + w * 0.35f, cy - w, cx + w, cy - w * 0.35f, cx + r, cy)
+        curveTo(cx + w, cy + w * 0.35f, cx + w * 0.35f, cy + w, cx, cy + r)
+        curveTo(cx - w * 0.35f, cy + w, cx - w, cy + w * 0.35f, cx - r, cy)
+        curveTo(cx - w, cy - w * 0.35f, cx - w * 0.35f, cy - w, cx, cy - r)
+        close()
+    }
+
+    val Sparkle = icon("Sparkle") {
+        fill {
+            sparkle(9.8f, 10f, 7.8f)
+            sparkle(18.4f, 18.2f, 4.3f)
+        }
+    }
+
     val StarOutline = icon("StarOutline") { line { star() } }
 
     private fun PathBuilder.shield() {

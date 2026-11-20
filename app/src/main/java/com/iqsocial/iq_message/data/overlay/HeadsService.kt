@@ -79,6 +79,18 @@ class HeadsService : Service() {
         }.exceptionOrNull() ?: return
 
         Log.e(TAG, "Foreground promotion refused - heads will not survive the app closing", refused)
+        // Saying so was not enough, and this is not a hypothetical:
+        //
+        //     RemoteServiceException$ForegroundServiceDidNotStartInTimeException:
+        //     Context.startForegroundService() did not then call
+        //     Service.startForeground(): ServiceRecord{... .data.overlay.HeadsService}
+        //
+        // A service started that way and left running without becoming foreground is
+        // one Android kills the whole app for, about ten seconds later - so a refused
+        // promotion took the app down with it, heads, call and all. Stopping is what
+        // ends the system's wait. The heads then last only as long as the app does,
+        // which is the thing the log above is for.
+        runCatching { stopSelf() }
     }
 
     private fun open(context: Context): PendingIntent =

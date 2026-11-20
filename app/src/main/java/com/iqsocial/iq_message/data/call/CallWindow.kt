@@ -38,6 +38,19 @@ object CallWindow {
     var callOnScreen by mutableStateOf(false)
         internal set
 
+    /**
+     * True while there is a call to float, wherever the person has navigated to.
+     *
+     * A different question from [callOnScreen], and the activity needs both. A call
+     * put aside with the minimise button is still a call: the screen showing is a
+     * chat, but leaving the app then should still leave the call in the corner
+     * rather than take it away. What this excludes is a call that has no business
+     * shrinking - one still ringing to be answered, which belongs on a full screen
+     * or in a notification, not in a thumbnail.
+     */
+    var callRunning by mutableStateOf(false)
+        internal set
+
     /** Whether that call has a picture, which decides the window's shape. */
     var video by mutableStateOf(false)
         internal set
@@ -58,5 +71,10 @@ object CallWindow {
     fun showing(call: Boolean, video: Boolean = false) {
         callOnScreen = call
         this.video = video
+    }
+
+    /** Called by the composition as a call starts and ends. */
+    fun inCall(running: Boolean) {
+        callRunning = running
     }
 }

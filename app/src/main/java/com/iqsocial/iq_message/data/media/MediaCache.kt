@@ -104,6 +104,20 @@ object MediaCache {
     }
 
     /**
+     * Signing out: the pictures were from somebody's conversations.
+     *
+     * Both halves, because both are the account's. The memory caches would go with
+     * the process anyway; the files would not, and a photo somebody was sent stays
+     * decodable on disk long after they have signed out of the phone.
+     */
+    fun clear() {
+        cache.evictAll()
+        tiny.evictAll()
+        failed.clear()
+        cacheDir?.let { dir -> runCatching { File(dir, "media").deleteRecursively() } }
+    }
+
+    /**
      * At most this many photos are fetched and decoded at once.
      *
      * Every row that scrolls into view asks for its picture, so flinging through a

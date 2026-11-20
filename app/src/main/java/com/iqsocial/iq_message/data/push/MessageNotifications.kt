@@ -1,6 +1,7 @@
 package com.iqsocial.iq_message.data.push
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -180,6 +181,12 @@ object MessageNotifications {
         }
     }
 
+    // Lint cannot follow the permission check through [allowed], which every path
+    // into this goes past - so it is told here rather than the check being copied
+    // into three places to be seen. If [allowed] ever stops being called first, this
+    // suppression is the lie that hides it; it belongs with the guard, not away
+    // from it.
+    @SuppressLint("MissingPermission")
     private fun post(
         context: Context,
         conversationId: String,
@@ -307,6 +314,12 @@ object MessageNotifications {
      * do. Same channel, tag and id as the conversation, so the next message that
      * posts properly replaces it rather than standing beside it.
      */
+    // Lint cannot follow the permission check through [allowed], which every path
+    // into this goes past - so it is told here rather than the check being copied
+    // into three places to be seen. If [allowed] ever stops being called first, this
+    // suppression is the lie that hides it; it belongs with the guard, not away
+    // from it.
+    @SuppressLint("MissingPermission")
     private fun postPlain(
         context: Context,
         conversationId: String,
@@ -371,6 +384,12 @@ object MessageNotifications {
      * without quietening messages, and it carries no actions because there is nothing
      * to do from here - this app cannot place a call yet.
      */
+    // Lint cannot follow the permission check through [allowed], which every path
+    // into this goes past - so it is told here rather than the check being copied
+    // into three places to be seen. If [allowed] ever stops being called first, this
+    // suppression is the lie that hides it; it belongs with the guard, not away
+    // from it.
+    @SuppressLint("MissingPermission")
     suspend fun showMissedCall(
         context: Context,
         callId: String,

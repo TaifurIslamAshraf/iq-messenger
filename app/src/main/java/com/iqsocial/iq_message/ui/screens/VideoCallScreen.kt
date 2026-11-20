@@ -24,6 +24,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import com.iqsocial.iq_message.data.call.CameraLook
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.call.CallAudio
 import com.iqsocial.iq_message.data.call.CallEngine
@@ -56,6 +61,9 @@ import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.InkFaint
+import com.iqsocial.iq_message.ui.components.SecureScreen
+import com.iqsocial.iq_message.ui.components.peerAllowsScreenshot
+import com.iqsocial.iq_message.ui.components.watchForScreenshotGesture
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 import kotlinx.coroutines.delay
@@ -68,8 +76,21 @@ fun VideoCallScreen(
     val d = IqTheme.dimens
     val call = CallCenter.call
     val person = remember(call?.peer) { callerOf(call) }
+
+    // A call is as private as the chat it came from, and the same rule decides it:
+    // the person on the other end says whether they may be screenshotted, and this
+    // phone obeys. This account's own setting is not read here - it is enforced on
+    // their phone, where this account is the peer. Theirs is read off the server,
+    // since nothing in a call's own payload carries it.
+    val peerAllows = peerAllowsScreenshot(call?.peer?.uid)
+    SecureScreen(!peerAllows)
     val profile = MeRepository.profile
     val toggleCamera = rememberCameraToggle()
+
+    /** The two sliders, which are only up while somebody is using them. */
+    var looks by remember { mutableStateOf(false) }
+    val lookContext = LocalContext.current
+    LaunchedEffect(Unit) { CameraLook.load(lookContext) }
     val me = remember(profile) {
         Person(
             id = profile?.uid.orEmpty().ifBlank { "me" },
@@ -105,6 +126,9 @@ fun VideoCallScreen(
         Modifier
             .fillMaxSize()
             .background(CallBlack)
+            // Only while the call is one the system is blocking; see
+            // [watchForScreenshotGesture].
+            .watchForScreenshotGesture(active = !peerAllows)
     ) {
         // Their camera, full screen. Until a frame arrives - they have not joined,
         // or have their camera off - the seeded gradient stands in, which is the same
@@ -166,6 +190,30 @@ fun VideoCallScreen(
                         Icon(
                             IqIcons.ChevronDown, "Minimize",
                             Modifier.size(d.iconLg), tint = Color.White
+                        )
+                    }
+                    Spacer(Modifier.width(d.gapSm))
+                    // The camera look lives up here, not in the control bar
+                    // below: it is set once near the start of a call and then
+                    // left alone, while the bar is for what gets reached for
+                    // mid-sentence - mute, speaker, hang up. Filled in while
+                    // something is on, so the screen says whether the picture
+                    // being sent is the plain one without the panel being opened.
+                    val lit = CameraLook.brightness > 0f || CameraLook.smooth > 0f
+                    Box(
+                        Modifier
+                            .size(d.iconButtonLg)
+                            .clip(CircleShape)
+                            .background(
+                                if (lit) Color.White else Color.White.copy(alpha = 0.16f)
+                            )
+                            .clickable { looks = !looks },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            IqIcons.Sparkle, "Camera look",
+                            Modifier.size(d.iconLg),
+                            tint = if (lit) Color.Black else Color.White
                         )
                     }
                     Spacer(Modifier.width(d.gapMd))
@@ -256,6 +304,17 @@ fun VideoCallScreen(
                 }
             }
 
+            if (looks) {
+                CameraLookPanel(
+                    onDone = { looks = false },
+                    modifier = Modifier
+                        .padding(horizontal = d.gutterTight)
+                        .padding(top = d.gapMd)
+                        .fillMaxWidth()
+                        .widthIn(max = d.contentMaxWidth)
+                )
+            }
+
             Spacer(Modifier.weight(1f))
 
             /*
@@ -340,11 +399,94 @@ fun VideoCallScreen(
                 VideoControl(
                     icon = IqIcons.FlipCamera,
                     label = "Flip",
-                    onClick = {},
+                    onClick = { CallEngine.flipCamera() },
                     modifier = Modifier.weight(1f)
                 )
             }
         }
+    }
+}
+
+/**
+ * Brightness and smoothing, over the call.
+ *
+ * Sliders rather than a preset or two: what the room's light needs is not a
+ * setting somebody can be given, and the picture is right there behind the panel
+ * while it is being moved - which is the only honest way to choose either of
+ * these. Both start at zero, where the filter costs nothing at all.
+ *
+ * What is changed here changes what the other phone receives, because the filter
+ * sits between the camera and the track rather than between the track and the
+ * screen. There is deliberately no "preview only" mode: a picture that flattered
+ * one side and not the other would be a surprise, not a feature.
+ */
+@Composable
+private fun CameraLookPanel(onDone: () -> Unit, modifier: Modifier = Modifier) {
+    val d = IqTheme.dimens
+    val context = LocalContext.current
+    Column(
+        modifier
+            .clip(RoundedCornerShape(d.radiusXl))
+            .background(Color.Black.copy(alpha = 0.62f))
+            .padding(horizontal = d.gapLg, vertical = d.gapMd)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Camera look",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "Done",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(d.radiusSm))
+                    .clickable(onClick = onDone)
+                    .padding(horizontal = d.gapSm, vertical = d.gapXs)
+            )
+        }
+        LookSlider(
+            label = "Brightness",
+            value = CameraLook.brightness,
+            onChange = { CameraLook.setBrightness(it, context) }
+        )
+        LookSlider(
+            label = "Smooth",
+            value = CameraLook.smooth,
+            onChange = { CameraLook.setSmooth(it, context) }
+        )
+    }
+}
+
+@Composable
+private fun LookSlider(label: String, value: Float, onChange: (Float) -> Unit) {
+    val d = IqTheme.dimens
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.width(d.scaled(86))
+        )
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Crimson,
+                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+            ),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "${(value * 100).toInt()}",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.7f),
+            modifier = Modifier.width(d.scaled(28))
+        )
     }
 }
 

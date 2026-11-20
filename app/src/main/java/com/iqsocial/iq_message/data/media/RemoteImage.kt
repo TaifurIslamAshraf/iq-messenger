@@ -12,8 +12,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * Images addressed by a plain URL — profile pictures, as the account API stores them.
@@ -52,8 +54,65 @@ object RemoteImage {
      */
     private fun keyOf(url: String, targetPx: Int) = targetPx.toString() + "|" + url
 
+    /**
+     * Where downloaded bytes are kept between launches.
+     *
+     * Set once at start-up, like [MediaCache.cacheDir]. Null until then, and
+     * everything below treats that as "no disk" rather than failing - the memory
+     * cache alone is what this was before.
+     */
+    var cacheDir: File? = null
+
+    /**
+     * The file for an address, named by its digest.
+     *
+     * Keyed on the address alone, not on the size asked for: these are the bytes as
+     * downloaded, and the same picture wanted small for an avatar and sharp for a
+     * link card is one file decoded two ways rather than two copies.
+     */
+    private fun fileFor(url: String): File? {
+        val dir = cacheDir ?: return null
+        val images = File(dir, "remote")
+        if (!images.exists() && !images.mkdirs()) return null
+        val digest = runCatching {
+            MessageDigest.getInstance("SHA-1")
+                .digest(url.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        }.getOrNull() ?: return null
+        return File(images, digest)
+    }
+
+    /**
+     * Keeps the folder from growing for ever.
+     *
+     * Avatars are small and there are not many of them, but link previews and
+     * profile pictures accumulate, and a cache nobody ever empties is a disk leak
+     * with a friendly name. Oldest first, down to half, so this runs rarely rather
+     * than on every write.
+     */
+    private fun prune(dir: File) {
+        val files = dir.listFiles() ?: return
+        if (files.size <= MAX_FILES) return
+        files.sortedBy { it.lastModified() }
+            .take(files.size - MAX_FILES / 2)
+            .forEach { runCatching { it.delete() } }
+    }
+
     fun peek(url: String, targetPx: Int = TARGET_PX): ImageBitmap? =
         if (url.isBlank()) null else cache.get(keyOf(url, targetPx))
+
+    /**
+     * Signing out: these were the faces of an account's contacts.
+     *
+     * The memory cache would go with the process, but the files would not - and a
+     * folder of people's profile pictures outliving the account they belong to is
+     * the kind of leftover nobody goes looking for.
+     */
+    fun clear() {
+        cache.evictAll()
+        failed.clear()
+        cacheDir?.let { dir -> runCatching { File(dir, "remote").deleteRecursively() } }
+    }
 
     /**
      * @param token sent as a bearer when the URL is one of our own server's - the
@@ -99,10 +158,33 @@ object RemoteImage {
         // served no image. Both are answers, not hiccups, so both are remembered
         // the same way a failed fetch is - there is nothing to gain by asking
         // again on every scroll.
-        val bytes = runCatching { download(url, token) }.getOrNull()
+        // What was downloaded last time, if it is still here. This is what makes a
+        // face appear with no connection: before, the picture lived only in memory,
+        // so every cold start began with grey circles and initials and stayed that
+        // way until the network came back.
+        val kept = fileFor(url)
+        val cached = kept?.takeIf { it.exists() }?.let { file ->
+            runCatching { file.readBytes() }.getOrNull()?.takeIf { it.isNotEmpty() }
+        }
+
+        val attempt = cached?.let { Result.success<ByteArray?>(it) }
+            ?: runCatching { download(url, token) }
+
+        val bytes = attempt.getOrNull()
         if (bytes == null) {
-            failed += key
+            // A server that answered "no" is an answer, and remembering it saves
+            // asking again on every scroll. A request that never got out is not:
+            // marking those would have one pass through a thread offline blacklist
+            // every face on the screen, and they would stay blank for the rest of
+            // the process even after the network came back.
+            if (attempt.isSuccess) failed += key
             return null
+        }
+        if (cached == null && kept != null) {
+            runCatching {
+                kept.writeBytes(bytes)
+                kept.parentFile?.let(::prune)
+            }
         }
 
         // Bounds first: an avatar is drawn at 40dp and the original may be a
@@ -164,4 +246,6 @@ object RemoteImage {
     /** Wide enough for the card a preview is drawn in. */
     const val PREVIEW_PX = 512
     private const val CACHE_BYTES = 16 * 1024 * 1024
+
+    private const val MAX_FILES = 240
 }

@@ -68,5 +68,19 @@ object VoiceWaveforms {
         prefs?.edit()?.apply { doomed.forEach(::remove) }?.apply()
     }
 
+    /**
+     * Signing out: what this phone measured belonged to those conversations.
+     *
+     * A waveform is a drawing of somebody's voice note, keyed by the message it came
+     * from. Left behind it would outlive the account it was recorded in, and sit in
+     * this app's preferences for whoever signs in next.
+     */
+    fun clear() {
+        synchronized(bars) {
+            bars.clear()
+            prefs?.edit()?.clear()?.apply()
+        }
+    }
+
     private const val MAX_KEPT = 300
 }

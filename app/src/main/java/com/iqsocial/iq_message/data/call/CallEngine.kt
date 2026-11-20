@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -124,6 +125,31 @@ object CallEngine {
      */
     var onConnectionLost: (() -> Unit)? = null
 
+    /**
+     * Everybody else has gone, and the server never said so.
+     *
+     * The other half of the same failure, seen from the other phone. When a call
+     * drops because one side's connection died, that side knows: the SDK gives up,
+     * [onConnectionLost] fires, and it tells the server. But it tells the server over
+     * the connection it has just lost - so the message does not arrive, and the
+     * phone that is still fine hears nothing at all. Its room simply empties, and it
+     * sat there running a call with nobody in it until somebody pressed the red
+     * button.
+     *
+     * Set by [CallCenter], which is the only part that can end a call properly.
+     */
+    var onEveryoneLeft: (() -> Unit)? = null
+
+    /**
+     * Whether anybody else has ever been in this room.
+     *
+     * Without it an empty room would end every outgoing call the instant it started:
+     * a call that is still ringing is a room of one, and that is not the same thing
+     * as a room that has emptied.
+     */
+    private var metAnyone = false
+    private var emptyRoom: Job? = null
+
     /** Who is talking right now, by LiveKit identity - which is the account uid. */
     var speaking by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -149,10 +175,16 @@ object CallEngine {
                     is RoomEvent.TrackUnsubscribed,
                     is RoomEvent.TrackPublished,
                     is RoomEvent.TrackUnpublished,
-                    is RoomEvent.ParticipantConnected,
-                    is RoomEvent.ParticipantDisconnected,
                     is RoomEvent.TrackMuted,
                     is RoomEvent.TrackUnmuted -> refresh(created)
+
+                    // The room's population changed, which is the one kind of
+                    // refresh that can also mean the call is over.
+                    is RoomEvent.ParticipantConnected,
+                    is RoomEvent.ParticipantDisconnected -> {
+                        refresh(created)
+                        watchForEmpty(created)
+                    }
 
                     is RoomEvent.ActiveSpeakersChanged ->
                         speaking = event.speakers.mapNotNull { it.identity?.value }.toSet()
@@ -205,8 +237,7 @@ object CallEngine {
             runCatching { created.localParticipant.setMicrophoneEnabled(true) }
                 .onSuccess { micOn = true }
             if (video) {
-                runCatching { created.localParticipant.setCameraEnabled(true) }
-                    .onSuccess { cameraOn = true }
+                if (enableCamera(created)) cameraOn = true
             }
             // The earpiece for a voice call, the loudspeaker for a video one: a
             // video call is held away from the face. A headset overrides both.
@@ -238,11 +269,15 @@ object CallEngine {
         val r = room ?: return
         val want = !cameraOn
         scope.launch {
-            runCatching { r.localParticipant.setCameraEnabled(want) }
-                .onSuccess {
-                    cameraOn = want
-                    refresh(r)
-                }
+            val done = if (want) {
+                enableCamera(r)
+            } else {
+                runCatching { r.localParticipant.setCameraEnabled(false) }.isSuccess
+            }
+            if (done) {
+                cameraOn = want
+                refresh(r)
+            }
         }
     }
 
@@ -320,6 +355,9 @@ object CallEngine {
         CallAudio.end()
         events?.cancel()
         events = null
+        emptyRoom?.cancel()
+        emptyRoom = null
+        metAnyone = false
         room = null
         connected = false
         reconnecting = false
@@ -337,6 +375,85 @@ object CallEngine {
      * Rebuilt from the room rather than tracked event by event: the events say *what*
      * happened and the room says *what is true*, and only the second one cannot drift.
      */
+    /**
+     * Ends the call when the last other person has gone and stayed gone.
+     *
+     * Not the moment the room empties. A phone that drops off a tunnel is removed
+     * from the room by the server and rejoins a second or two later, and ending on
+     * the first empty reading would turn every lift into a dropped call - the same
+     * mistake `Disconnected` used to make from this end. So an empty room is
+     * *suspected* for [EMPTY_ROOM_MS] and anybody arriving in that time calls it
+     * off.
+     *
+     * Only after somebody has been here: see [metAnyone].
+     */
+    private fun watchForEmpty(r: Room) {
+        if (r.remoteParticipants.isNotEmpty()) {
+            metAnyone = true
+            emptyRoom?.cancel()
+            emptyRoom = null
+            return
+        }
+        if (!metAnyone || emptyRoom != null) return
+        emptyRoom = scope.launch {
+            delay(EMPTY_ROOM_MS)
+            emptyRoom = null
+            // Asked again rather than trusted: the room is the truth, and between
+            // the two readings somebody may have come back.
+            if (room !== r || r.remoteParticipants.isNotEmpty()) return@launch
+            onEveryoneLeft?.invoke()
+        }
+    }
+
+    /**
+     * The look of this camera, hung on whatever track it is publishing.
+     *
+     * One filter for the life of the process rather than one per call: it holds
+     * shader programs and framebuffers, which belong to the capturer's GL context,
+     * and it builds them again by itself whenever a new context hands it a frame.
+     */
+    private val cameraFilter = CameraFilter()
+
+    /**
+     * Turns the camera on, with the filter already inside the track.
+     *
+     * The track is made here rather than left to `setCameraEnabled`, because a
+     * filter cannot safely be added to a camera track that already exists. The
+     * SDK's way in is `restartTrack(videoProcessor = ...)`, and in 2.29.0 that
+     * kills the self-view: a track built without a processor feeds local
+     * renderers raw frames through a `CaptureDispatchObserver`, renderers
+     * registered that way never reach the `sinks` list that `restartTrack`
+     * migrates, and the field holding the observer is not reassigned afterwards -
+     * so the old renderers stay bound to a disposed capturer and every later one
+     * joins them. The other phone still saw the picture; this one showed an empty
+     * box where the self-view should be.
+     *
+     * Making the track with the processor is the path the SDK documents, and it
+     * has no dispatch observer at all: local renderers hang off the track, so the
+     * self-view shows exactly the frames being sent - filter included, which is
+     * the only way to judge the sliders while moving them.
+     *
+     * `setCameraEnabled(true)` still finishes the job either way. For the track
+     * published here it only unmutes it and starts the capture; if publishing
+     * failed - no camera permission, a camera already held - it makes its own
+     * unfiltered track, and the call keeps its picture rather than losing it to a
+     * filter nobody asked about.
+     */
+    private suspend fun enableCamera(r: Room): Boolean {
+        val me = r.localParticipant
+        if (me.getTrackPublication(io.livekit.android.room.track.Track.Source.CAMERA) == null) {
+            runCatching {
+                val track = me.createVideoTrack(videoProcessor = cameraFilter)
+                track.start()
+                track.startCapture()
+                me.publishVideoTrack(track)
+            }.onFailure {
+                android.util.Log.w("CallEngine", "Could not publish the filtered camera", it)
+            }
+        }
+        return runCatching { me.setCameraEnabled(true) }.getOrDefault(false)
+    }
+
     private fun refresh(r: Room) {
         localVideo = r.localParticipant.videoTrackPublications
             .firstOrNull { it.second is VideoTrack }
@@ -369,4 +486,12 @@ object CallEngine {
         appContext = context.applicationContext
         CallAudio.init(context)
     }
+
+    /**
+     * How long an empty room is given to fill again before the call is called over.
+     *
+     * Long enough for a rejoin after a connection the server dropped, short enough
+     * that nobody sits watching a call that has already ended.
+     */
+    private const val EMPTY_ROOM_MS = 6_000L
 }

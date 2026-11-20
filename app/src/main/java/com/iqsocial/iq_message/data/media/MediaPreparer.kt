@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -80,6 +81,20 @@ object MediaPreparer {
         else -> Kind.DOCUMENT
     }
 
+    /**
+     * What a file's name says it is.
+     *
+     * The second opinion [prepare] asks for, and on a `file://` path usually the
+     * only one. Blank when the extension means nothing to the system, which is the
+     * honest answer - a file nobody can name is a document.
+     */
+    private fun byExtension(uri: Uri): String {
+        val name = uri.lastPathSegment.orEmpty()
+        val extension = name.substringAfterLast('.', "").lowercase()
+        if (extension.isBlank() || extension == name.lowercase()) return ""
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension).orEmpty()
+    }
+
     /** The refusal for a file over its kind's limit, or null when it fits. */
     fun overLimit(kind: Kind, size: Long): String? =
         if (size <= kind.maxBytes) null
@@ -104,7 +119,13 @@ object MediaPreparer {
     ): Result<Prepared> =
         withContext(Dispatchers.IO) {
             val resolver = context.contentResolver
-            val mime = resolver.getType(uri).orEmpty().ifBlank { "application/octet-stream" }
+            // The name, when the resolver will not say. A `content://` provider
+            // answers this itself; a plain file has only its extension, and this is
+            // reached with a plain file every time - what is prepared is the copy
+            // the queue took, not the picture the person tapped.
+            val mime = resolver.getType(uri).orEmpty()
+                .ifBlank { byExtension(uri) }
+                .ifBlank { "application/octet-stream" }
 
             val size = runCatching {
                 resolver.openFileDescriptor(uri, "r")?.use { it.statSize }

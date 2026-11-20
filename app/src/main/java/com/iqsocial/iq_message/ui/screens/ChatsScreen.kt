@@ -23,6 +23,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -60,6 +64,8 @@ import androidx.compose.ui.window.Dialog
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.chat.ChatRepository
+import com.iqsocial.iq_message.data.profile.PresenceRepository
+import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatConversation
 import com.iqsocial.iq_message.data.remote.ConversationsApi
@@ -140,7 +146,58 @@ fun ChatsScreen(
             is ApiResult.Failure -> emptyList()
         }
     }
+    /**
+     * Who in this list is online.
+     *
+     * Watched over the socket first and asked for as a snapshot second, and in
+     * that order for the reason written at the same pair in the chat screen: the
+     * subscription cannot block and the request can.
+     *
+     * Keyed on the list itself, so a page of conversations arriving - or a new one
+     * appearing at the top - brings its people with it. The subscription replaces
+     * rather than adds up, because a list that has scrolled a long way would
+     * otherwise be watching every person it has ever shown.
+     */
+    val rowsForPresence = searchHits ?: ChatRepository.conversations
+    val peerUids = remember(rowsForPresence) {
+        rowsForPresence.mapNotNull { it.peer?.uid?.takeIf(String::isNotBlank) }.distinct()
+    }
+    LaunchedEffect(peerUids, token) {
+        if (peerUids.isEmpty() || token.isNullOrBlank()) return@LaunchedEffect
+        ChatSocket.watchPresence(peerUids)
+        PresenceRepository.refresh(token, peerUids)
+    }
+
     val rows = searchHits ?: ChatRepository.conversations
+
+    val listState = rememberLazyListState()
+
+    /**
+     * The next page of conversations, as the end of the list comes into view.
+     *
+     * [ChatRepository.loadMore] and the cursor it walks have been here all along;
+     * nothing called it. An account with more chats than one page simply had the
+     * rest missing, with no sign that there was a rest - the list just ended.
+     *
+     * Carries the row count rather than a plain "near the end", for the reason the
+     * thread does: a page that lands while somebody is sitting at the bottom has to
+     * be able to ask for the one after it, and a boolean that was already true would
+     * be dropped as unchanged.
+     *
+     * Not while searching. Those rows are the server's answer to a query, and paging
+     * the inbox underneath them would append conversations nobody asked about.
+     */
+    LaunchedEffect(token, searchHits == null) {
+        if (searchHits != null) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (last >= info.totalItemsCount - MORE_WHEN_WITHIN) rows.size else -1
+        }
+            .distinctUntilChanged()
+            .filter { it >= 0 }
+            .collect { if (ChatRepository.canLoadMore) ChatRepository.loadMore(token) }
+    }
 
     Box(
         Modifier
@@ -157,7 +214,8 @@ fun ChatsScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = d.fab + d.gapXl)
             ) {
             item {
@@ -481,14 +539,27 @@ private fun ConversationRow(
 ) {
     val d = IqTheme.dimens
     val peer = conversation.peer
-    val person = remember(peer) {
+    // Read here rather than passed in, so the dot lights up by itself when the
+    // answer arrives: the repository is a snapshot map and this row is reading it.
+    val presence = PresenceRepository.of(peer?.uid.orEmpty())
+    val person = remember(peer, presence?.online) {
         Person(
             id = peer?.uid ?: conversation.id,
             name = peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown",
             handle = "",
+            online = presence?.online == true,
             photo = peer?.profilePicture.orEmpty()
         )
     }
+
+    /**
+     * Whether this row still has something in it nobody has read.
+     *
+     * The server's own reading of it, counted or marked by hand - see
+     * [ChatConversation.showsUnread] - so a conversation marked unread on another
+     * device reads as unread here too.
+     */
+    val unseen = conversation.showsUnread
 
     Row(
         Modifier
@@ -498,7 +569,11 @@ private fun ConversationRow(
             .padding(horizontal = d.gutter, vertical = d.gapMd),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Avatar(person = person, size = d.avatarLg)
+        // The dot only ever appears for somebody the server has said is online.
+        // Nothing is inferred: an account that hides its active status and one
+        // that is simply offline come back identical, and inventing a difference
+        // between them is the one thing that setting exists to prevent.
+        Avatar(person = person, size = d.avatarLg, showPresence = true)
         Spacer(Modifier.width(d.gapMd))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -506,6 +581,11 @@ private fun ConversationRow(
                     person.name,
                     style = MaterialTheme.typography.titleLarge,
                     color = Ink,
+                    // Heavier while something is waiting. The badge says how many,
+                    // and the weight is what makes the row findable without
+                    // reading it - which is how a list of twenty conversations is
+                    // actually used.
+                    fontWeight = if (unseen) FontWeight.Bold else null,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
@@ -519,7 +599,10 @@ private fun ConversationRow(
             Text(
                 conversation.lastMessage.preview(),
                 style = MaterialTheme.typography.bodyLarge,
-                color = InkMuted,
+                // Darker as well as heavier: grey is what the line is while it is
+                // read, and a bold grey line still reads as spent.
+                color = if (unseen) Ink else InkMuted,
+                fontWeight = if (unseen) FontWeight.SemiBold else null,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -532,8 +615,10 @@ private fun ConversationRow(
             Text(
                 chatTimestamp(conversation.lastMessageAt),
                 style = MaterialTheme.typography.bodySmall,
-                color = InkMuted,
-                fontWeight = FontWeight.Medium,
+                // The time takes the accent rather than the weight: it is the one
+                // part of the row that says *when* the waiting message arrived.
+                color = if (unseen) Crimson else InkMuted,
+                fontWeight = if (unseen) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -735,3 +820,11 @@ internal fun chatTimestamp(millis: Long): String {
     }
     return java.text.SimpleDateFormat(pattern, Locale.US).format(then.time)
 }
+
+/**
+ * How many rows short of the end the next page is asked for.
+ *
+ * Conversation rows are tall, so a handful is already most of a screen - far enough
+ * ahead that the page is usually there before the list runs out.
+ */
+private const val MORE_WHEN_WITHIN = 4

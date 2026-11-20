@@ -102,6 +102,19 @@ fun MediaTray(
     var items by remember { mutableStateOf<List<DeviceGallery.Item>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
 
+    /**
+     * What has been picked but not sent yet, in the order it was picked.
+     *
+     * A tap used to send the photo there and then, which is one tap for the right
+     * photo and no way back from the wrong one - and no way at all to send two.
+     * Now a tap chooses, the bar at the foot says how many, and sending is its own
+     * deliberate press.
+     *
+     * A list rather than a set, because the order is the order they arrive in the
+     * conversation and picking four photos is picking them in an order.
+     */
+    var chosen by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
     val ask = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -298,21 +311,93 @@ fun MediaTray(
                 columns = GridCells.Adaptive(minSize = d.scaled(96)),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f)
                     .nestedScroll(fromGrid),
                 contentPadding = PaddingValues(horizontal = d.gapXs, vertical = d.gapXs),
                 horizontalArrangement = Arrangement.spacedBy(d.scaled(2)),
                 verticalArrangement = Arrangement.spacedBy(d.scaled(2))
             ) {
                 items(items, key = { it.uri.toString() }) { item ->
-                    GalleryTile(item) { onPick(item.uri) }
+                    val at = chosen.indexOf(item.uri)
+                    GalleryTile(item, order = if (at < 0) 0 else at + 1) {
+                        chosen = if (at < 0) chosen + item.uri else chosen - item.uri
+                    }
                 }
+            }
+        }
+
+        // Only once something is chosen: an empty bar sitting under the roll is a
+        // button that does nothing, taking room from the thing being chosen from.
+        if (chosen.isNotEmpty()) {
+            SendBar(count = chosen.size) {
+                // Handed over one at a time, in the order they were picked. The
+                // conversation takes them as separate messages - which is what
+                // they are - and the queue sends them in the order they arrive.
+                val going = chosen
+                chosen = emptyList()
+                going.forEach(onPick)
             }
         }
     }
 }
 
+/**
+ * The foot of the tray once something is chosen: how many, and send.
+ *
+ * Inside the sheet rather than over the composer, because it belongs to the
+ * choosing: it appears with the first tap and leaves with the last one undone, and
+ * the composer underneath is for words.
+ */
 @Composable
-private fun GalleryTile(item: DeviceGallery.Item, onClick: () -> Unit) {
+private fun SendBar(count: Int, onSend: () -> Unit) {
+    val d = IqTheme.dimens
+    HairlineDivider()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White)
+            .padding(horizontal = d.gutter, vertical = d.gapSm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            if (count == 1) "1 selected" else "$count selected",
+            style = MaterialTheme.typography.titleMedium,
+            color = InkMuted
+        )
+        Spacer(Modifier.weight(1f))
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(d.radiusLg))
+                .background(Crimson)
+                .clickable(onClick = onSend)
+                .padding(horizontal = d.gapLg, vertical = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Send",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.width(d.gapXs))
+            Icon(IqIcons.Send, null, Modifier.size(d.iconSm), tint = Color.White)
+        }
+    }
+}
+
+/**
+ * One photo, and whether it is going.
+ *
+ * [order] is its place in the selection, counting from one, or zero for a tile
+ * that is not chosen - a number rather than a flag, because picking four photos
+ * is picking them in an order and the tile is where that order can be read.
+ */
+@Composable
+private fun GalleryTile(
+    item: DeviceGallery.Item,
+    order: Int = 0,
+    onClick: () -> Unit
+) {
     val d = IqTheme.dimens
     val context = LocalContext.current
     var thumb by remember(item.uri) { mutableStateOf(DeviceGallery.peek(item.uri)) }
@@ -321,6 +406,7 @@ private fun GalleryTile(item: DeviceGallery.Item, onClick: () -> Unit) {
         if (thumb == null) thumb = DeviceGallery.thumbnail(context, item.uri)
     }
 
+    val picked = order > 0
     Box(
         Modifier
             .aspectRatio(1f)
@@ -333,8 +419,31 @@ private fun GalleryTile(item: DeviceGallery.Item, onClick: () -> Unit) {
                 bitmap = it,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                // Drawn a little smaller when chosen, so the tile reads as picked
+                // up off the sheet rather than merely ticked.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (picked) Modifier.padding(d.gapXs) else Modifier)
+                    .clip(RoundedCornerShape(d.radiusSm))
             )
+        }
+        if (picked) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(d.gapXs)
+                    .size(d.iconLg)
+                    .clip(CircleShape)
+                    .background(Crimson),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    order.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
         if (item.isVideo) {
             // Duration marks a video apart from a photo at a glance.

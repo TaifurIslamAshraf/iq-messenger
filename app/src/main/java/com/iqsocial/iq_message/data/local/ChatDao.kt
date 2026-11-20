@@ -36,6 +36,28 @@ interface ChatDao {
     )
     fun thread(conversationId: String): Flow<List<MessageRow>>
 
+    /**
+     * The newest [limit] of them, newest first.
+     *
+     * The thread is read through this rather than through [thread], because the
+     * screen only ever draws from the bottom: opening a conversation with four
+     * thousand messages in it does not need four thousand rows read, parsed and
+     * turned into bubbles to show the last twenty-five of them. The caller turns
+     * the page back the right way round.
+     *
+     * Newest first is what makes the limit mean "the end of the conversation";
+     * ascending with a limit would be the *beginning* of it.
+     */
+    @Query(
+        """
+        SELECT * FROM messages
+        WHERE conversationId = :conversationId AND deletedAt = 0
+        ORDER BY createdAt DESC, seq DESC
+        LIMIT :limit
+        """
+    )
+    fun threadTail(conversationId: String, limit: Int): Flow<List<MessageRow>>
+
     @Query("SELECT * FROM messages WHERE clientId = :clientId LIMIT 1")
     suspend fun message(clientId: String): MessageRow?
 

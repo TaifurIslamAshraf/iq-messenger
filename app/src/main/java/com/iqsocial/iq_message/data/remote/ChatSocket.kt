@@ -42,6 +42,15 @@ object ChatSocket {
 
         /** Someone's delivered/read position moved. */
         data class ReceiptChanged(val receipt: Receipt) : Event
+
+        /**
+         * Somebody screenshotted this account's profile.
+         *
+         * Carried as the raw payload rather than parsed into a type: its shape is
+         * not in the API description - only that the event is sent - so the one
+         * place that reads it is the one place that has to be tolerant about it.
+         */
+        data class ScreenshotSeen(val payload: org.json.JSONObject) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 64)
@@ -75,14 +84,24 @@ object ChatSocket {
         socket = IO.socket(MessengerConfig.BASE_URL, options).apply {
             on(Socket.EVENT_CONNECT) {
                 connected = true
+                Log.i(TAG, "socket connected")
                 // A subscription lives on the connection and dies with it. The
                 // client reconnects by itself after a tunnel or a handover, and
                 // without this it would come back attached to nothing - presence
                 // frozen at whatever it was when the line dropped, with no sign.
                 resendPresenceWatch()
             }
-            on(Socket.EVENT_DISCONNECT) { connected = false }
-            on(Socket.EVENT_CONNECT_ERROR) { connected = false }
+            on(Socket.EVENT_DISCONNECT) { args ->
+                connected = false
+                Log.i(TAG, "socket disconnected: " + args.joinToString())
+            }
+            // Loud, because this is the failure that looks like nothing at all: a
+            // socket that never comes up means no live messages, no receipts and
+            // no presence, and every one of those has a slower path that hides it.
+            on(Socket.EVENT_CONNECT_ERROR) { args ->
+                connected = false
+                Log.w(TAG, "socket connect error: " + args.joinToString { describe(it) })
+            }
 
             on("message:new") { args -> args.firstObject()?.let { emitMessage(it, ::New) } }
             on("message:updated") { args -> args.firstObject()?.let { emitMessage(it, ::Updated) } }
@@ -98,6 +117,20 @@ object ChatSocket {
                 args.firstObject()?.optJSONObject("call")
                     ?.let { CallCenter.ringing(ChatCall.from(it)) }
             }
+            // Everything the server sends, by name, written down once.
+            //
+            // The socket's events are not documented anywhere the server
+            // publishes - no AsyncAPI, no socket page - so the names below are
+            // inferences, and an inference that is wrong is silent. This says what
+            // actually arrives, which turns "presence does not work" into either
+            // "the server sends nothing" or "it sends this, under that name".
+            runCatching {
+                onAnyIncoming { args ->
+                    val parts = args.joinToString(" ") { it.toString().take(400) }
+                    Log.i(TAG, "socket in: $parts")
+                }
+            }.onFailure { Log.w(TAG, "Cannot watch every socket event", it) }
+
             // Presence, under whatever name it arrives.
             //
             // `presence:subscribe` is named in the API description and nothing else
@@ -109,6 +142,13 @@ object ChatSocket {
             // and be silently wrong.
             PRESENCE_EVENTS.forEach { name ->
                 on(name) { args -> presenceUpdate(name, args) }
+            }
+
+            // The server sends this one over the socket and by push; whichever
+            // arrives first shows the alert and the other replaces it, because
+            // both post under the notification's own id. See [ScreenshotAlerts].
+            on("profile:screenshot") { args ->
+                args.firstObject()?.let { _events.tryEmit(Event.ScreenshotSeen(it)) }
             }
 
             on("call:accepted") { args -> callState(args) }
@@ -143,9 +183,26 @@ object ChatSocket {
     }
 
     private fun sendPresenceWatch(uids: List<String>) {
-        val live = socket ?: return
-        if (!live.connected()) return
-        live.emit("presence:subscribe", JSONObject().put("uids", JSONArray(uids)))
+        val live = socket
+        if (live == null) {
+            Log.i(TAG, "presence:subscribe not sent - no socket")
+            return
+        }
+        if (!live.connected()) {
+            Log.i(TAG, "presence:subscribe not sent - socket is down")
+            return
+        }
+        Log.i(TAG, "subscribing to " + uids.joinToString() + " as " + SUBSCRIBE_EVENTS.joinToString())
+        SUBSCRIBE_EVENTS.forEach { name ->
+            live.emit(name, JSONObject().put("uids", JSONArray(uids)))
+        }
+    }
+
+    /** An exception says more than its `toString`, and args can hold either. */
+    private fun describe(arg: Any?): String = when (arg) {
+        is Throwable -> (arg.message ?: arg::class.java.simpleName) +
+            (arg.cause?.let { " / " + it.message } ?: "")
+        else -> arg.toString().take(300)
     }
 
     /**
@@ -169,8 +226,18 @@ object ChatSocket {
             listOf(Presence.from(json.optJSONObject("presence") ?: json))
         }
         val real = updates.filter { it.uid.isNotBlank() }
-        if (real.isEmpty()) return
-        Log.i(TAG, "presence on '" + event + "' for " + real.size + " account(s)")
+        if (real.isEmpty()) {
+            // Arrived under a name this app expected, in a shape it did not. Worth
+            // more than silence: it says the name was right and the parse is what
+            // needs changing.
+            Log.i(TAG, "presence on '" + event + "' but no uid in it: " + json.toString().take(400))
+            return
+        }
+        Log.i(
+            TAG,
+            "presence on '" + event + "' for " + real.size + " account(s): " +
+                real.joinToString { it.uid + " online=" + it.online + " seen=" + it.lastSeenAt }
+        )
         PresenceRepository.remember(real)
     }
 
@@ -234,10 +301,26 @@ object ChatSocket {
      * listening costs nothing and being wrong costs the feature.
      */
     private val PRESENCE_EVENTS = listOf(
+        // The name the server actually uses.
+        "presence:subscribe_people",
         "presence:updated",
         "presence:changed",
         "presence:update",
         "presence"
+    )
+
+    /**
+     * The names this app asks under.
+     *
+     * Both, because the one sentence in the API description says
+     * `presence:subscribe` and the server answers on `presence:subscribe_people` -
+     * and an emit to a name nobody is listening on costs one frame, while missing
+     * the right one costs the feature. When the pair is settled, this is a list of
+     * one again.
+     */
+    private val SUBSCRIBE_EVENTS = listOf(
+        "presence:subscribe_people",
+        "presence:subscribe"
     )
 }
 

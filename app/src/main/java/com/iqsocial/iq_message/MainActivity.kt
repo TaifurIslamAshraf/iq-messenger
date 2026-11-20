@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -28,6 +29,8 @@ import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.call.CallEngine
 import com.iqsocial.iq_message.data.call.CallPipActions
 import com.iqsocial.iq_message.data.call.CallWindow
+import com.iqsocial.iq_message.data.privacy.ScreenshotWatcher
+import com.iqsocial.iq_message.data.privacy.ScreenshotWitness
 import com.iqsocial.iq_message.data.push.IqMessagingService
 import com.iqsocial.iq_message.data.push.NotificationActions
 import com.iqsocial.iq_message.ui.theme.IQMessageTheme
@@ -37,16 +40,26 @@ class MainActivity : ComponentActivity() {
     /**
      * The conversation a tapped notification asked for, if any.
      *
-     * State rather than a field read once, because the activity is `singleTop`: a
+     * State rather than a field read once, because the activity is `singleTask`: a
      * second notification tapped while the app is already open arrives through
      * [onNewIntent] rather than a fresh [onCreate], and reading the intent only at
      * start-up would open the first conversation and ignore every one after it.
      */
     private val opened = mutableStateOf<String?>(null)
 
+    /**
+     * Whether the tap that brought us here was on the running call's notification.
+     *
+     * Its own state for the same reason [opened] is: the activity is `singleTask`,
+     * so the second tap arrives through [onNewIntent] and reading the intent once
+     * at start-up would act on the first and ignore every one after it.
+     */
+    private val openCall = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         opened.value = conversationOf(intent)
+        openCall.value = intent?.getBooleanExtra(EXTRA_OPEN_CALL, false) == true
         answerIfAsked(intent)
         // Transparent bars; each screen sets its own icon contrast via SystemBarIcons.
         val transparent = android.graphics.Color.TRANSPARENT
@@ -58,16 +71,56 @@ class MainActivity : ComponentActivity() {
             IQMessageTheme {
                 IqApp(
                     openConversation = opened.value,
-                    onConversationOpened = { opened.value = null }
+                    onConversationOpened = { opened.value = null },
+                    openCall = openCall.value,
+                    onCallOpened = { openCall.value = false }
                 )
             }
         }
+    }
+
+    /**
+     * The system telling this app that somebody screenshotted it.
+     *
+     * Android 14 and up only, and behind `DETECT_SCREEN_CAPTURE` in the manifest.
+     * There is no equivalent before it: the alternative is watching the pictures
+     * folder for a new screenshot, which means holding the reader's whole photo
+     * library to catch one file, and that is a much larger thing to take than this
+     * feature is worth.
+     *
+     * Built lazily and only ever touched inside a version check, because the
+     * callback type itself does not exist on older phones - a field initialised
+     * eagerly would be loading an interface that is not there.
+     */
+    private val screenshots by lazy(LazyThreadSafetyMode.NONE) {
+        Activity.ScreenCaptureCallback { ScreenshotWitness.captured(applicationContext) }
+    }
+
+    /**
+     * Watching for screenshots while the app is in front.
+     *
+     * Registered in `onStart` rather than `onCreate` because that is the window
+     * it can report on: a screenshot of another app is not this app's business,
+     * and the system only offers the callback for the activity that is showing.
+     */
+    override fun onStart() {
+        super.onStart()
+        // The gallery watch runs on every version, including the ones that have
+        // the platform callback: a maker with its own screenshot implementation
+        // can take one without the platform telling anybody, and then this is the
+        // only thing that notices. Duplicates are dropped by [ScreenshotWitness].
+        ScreenshotWatcher.start(this)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        runCatching { registerScreenCaptureCallback(mainExecutor, screenshots) }
+            .onSuccess { Log.i(TAG, "watching for screenshots of this app") }
+            .onFailure { Log.w(TAG, "Could not watch for screenshots", it) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         opened.value = conversationOf(intent)
+        openCall.value = intent.getBooleanExtra(EXTRA_OPEN_CALL, false)
         answerIfAsked(intent)
     }
 
@@ -78,10 +131,15 @@ class MainActivity : ComponentActivity() {
      * is opened - a moment that for every other screen means "go away" and for a
      * call means "keep this where I can see it". The back gesture is handled in the
      * composition instead, which is where the navigation stack is.
+     *
+     * Either flag, not just the first. A call minimised with the button is still a
+     * call, and the screen in front of it is a chat - so asking only whether a call
+     * screen was up meant that leaving the app from there took the call away with
+     * it, which is the one thing this is here to prevent.
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (CallWindow.callOnScreen) enterCallPip()
+        if (CallWindow.callOnScreen || CallWindow.callRunning) enterCallPip()
     }
 
     /**
@@ -110,6 +168,11 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         if (CallWindow.inPip) CallWindow.inPip = false
+        // Out of the foreground: a screenshot of somebody else's app is not this
+        // app's business, and the gallery should not be watched for one.
+        ScreenshotWatcher.stop(this)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        runCatching { unregisterScreenCaptureCallback(screenshots) }
     }
 
     /**
@@ -146,6 +209,20 @@ class MainActivity : ComponentActivity() {
                 ?.takeIf { it.isNotBlank() }
         }.getOrNull()
     }
+
+    companion object {
+        /**
+         * Set on the intent behind the running call's notification.
+         *
+         * The notification is about the call, so a tap on it is a request for the
+         * call - not for whatever screen the app was last left on. Without this it
+         * opened the chat list, with the call it was about reachable only through
+         * the strip at the top of it.
+         */
+        const val EXTRA_OPEN_CALL = "iq.open_call"
+
+        private const val TAG = "MainActivity"
+    }
 }
 
 @Preview(showBackground = true, widthDp = 411, heightDp = 915)
@@ -181,7 +258,10 @@ private fun AppPreview() {
 fun Activity.enterCallPip(video: Boolean = CallWindow.video): Boolean {
     if (!canPip()) return false
     @Suppress("NewApi")   // canPip() is the check; lint cannot see through it
-    return runCatching { enterPictureInPictureMode(callPipParams(video)) }
+    // Armed on the way in, because these params are the ones the window keeps: a
+    // call shrunk by hand and then expanded again would otherwise be a call that no
+    // longer shrinks by itself until something else re-arms it.
+    return runCatching { enterPictureInPictureMode(callPipParams(video, autoEnter = true)) }
         .getOrDefault(false)
 }
 
@@ -209,16 +289,28 @@ fun Activity.leaveCallPip() {
 }
 
 /**
- * Redraws the window's buttons after the thing they show has changed.
+ * Redraws the window's buttons after the thing they show has changed, and says
+ * whether leaving the app should shrink the call on its own.
  *
  * The actions are a fixed picture taken when they were built, so a microphone muted
  * from the window leaves a "mute" button sitting over a muted microphone until this
  * is called. Cheap, and ignored by the system when the window is not up.
+ *
+ * @param autoEnter from Android 12, whether the system itself puts this window in
+ *   the corner when the app is left. Worth having even though [onUserLeaveHint]
+ *   already asks: the system does it *as part of* the gesture, so the call shrinks
+ *   into the corner with the app instead of snapping there once it has gone. It has
+ *   to be set while the call is still on screen, which is why this is called for a
+ *   live call and not only for one already in a window - and set back to false when
+ *   the call ends, or home would float the chat list.
  */
-fun Activity.updateCallPipParams(video: Boolean = CallWindow.video) {
+fun Activity.updateCallPipParams(
+    video: Boolean = CallWindow.video,
+    autoEnter: Boolean = false
+) {
     if (!canPip()) return
     @Suppress("NewApi")
-    runCatching { setPictureInPictureParams(callPipParams(video)) }
+    runCatching { setPictureInPictureParams(callPipParams(video, autoEnter)) }
 }
 
 private fun Activity.canPip(): Boolean =
@@ -240,7 +332,10 @@ private fun Activity.canPip(): Boolean =
  * state currently is.
  */
 @RequiresApi(Build.VERSION_CODES.O)
-private fun Activity.callPipParams(video: Boolean): PictureInPictureParams {
+private fun Activity.callPipParams(
+    video: Boolean,
+    autoEnter: Boolean = false
+): PictureInPictureParams {
     val builder = PictureInPictureParams.Builder()
         // A video call is a picture, so it gets the shape of one. A voice call is a
         // face over a name over a clock, which is a column - and the square this
@@ -252,6 +347,11 @@ private fun Activity.callPipParams(video: Boolean): PictureInPictureParams {
         // Android refuses a ratio outside roughly 1:2.39 to 2.39:1, so both of
         // these are well inside.
         .setAspectRatio(if (video) Rational(9, 16) else Rational(3, 4))
+
+    // Always stated, never left alone. The system keeps only the fields a set of
+    // params actually carries, so a call that armed this and then ended would leave
+    // it armed with nothing to float but whatever screen came next.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(autoEnter)
 
     val muted = !CallEngine.micOn
     // The route, not a loudspeaker flag: a call on a headset is neither "speaker

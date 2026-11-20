@@ -26,6 +26,7 @@ import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
 import android.view.View
 import android.view.WindowManager
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -120,6 +121,47 @@ object ChatHeads {
         onMain { showNow(context, conversationId, name, face, unread) }
     }
 
+    /**
+     * A conversation is being read: clear its head's count, and - if asked - give
+     * it one.
+     *
+     * [create] is the whole question, and the answer depends on where the chat was
+     * opened. **In the panel**, yes: the reader is already floating over another
+     * app, the heads are that panel's tabs, and a chat opened from its list without
+     * a head of its own would be a tab with nothing to press to get back to it.
+     * **In the app**, no. A head is a way back into a conversation from outside the
+     * app, and the reader who is inside the app has not asked for one - opening a
+     * chat there was leaving a head on their screen for every person they looked
+     * at, which turns a shortcut into litter.
+     *
+     * The count clears either way, because that part is about the chat being read
+     * and not about where it is being read: a head with 3 on it for a thread open
+     * on the screen is wrong wherever the thread was opened from.
+     *
+     * No head is ever moved. It used to be pulled to the front as the newest thing
+     * being read, which meant every head after it slid along to make room:
+     * reopening one chat rearranged all of them. A head is a place as much as it is
+     * a person, and the hand learns where each one is. Only a chat without a head
+     * changes the row, and then only by adding one at the front.
+     */
+    fun opened(
+        context: Context,
+        conversationId: String,
+        name: String,
+        face: Bitmap?,
+        create: Boolean
+    ) = onMain {
+        if (!allowed(context) || conversationId.isBlank()) return@onMain
+        val app = context.applicationContext
+        val already = heads.firstOrNull { it.conversationId == conversationId }
+        if (already != null) {
+            already.view.unread = 0
+            return@onMain
+        }
+        if (!create) return@onMain
+        showNow(app, conversationId, name, face, unread = 0)
+    }
+
     private fun showNow(
         context: Context,
         conversationId: String,
@@ -150,7 +192,17 @@ object ChatHeads {
         val strip = row ?: return
 
         val view = HeadView(app, name, face)
-        if (unread > 0) view.unread = unread
+        // Set either way. The view starts at one because a head usually exists
+        // because something arrived; a head for a chat being *read* exists for the
+        // opposite reason, and would otherwise wear a count of one for a message
+        // the reader is looking at.
+        view.unread = unread.coerceAtLeast(0)
+        // Ringed from the start when this is the chat the panel is already showing.
+        // The panel marks the open head when it changes level, and for a chat opened
+        // from the list *inside* the panel that happens a frame before the head for
+        // it exists - so the head that arrives afterwards was the one head without
+        // the mark saying it is the one being read.
+        view.active = conversationId == ChatWindow.showing
         view.setOnClickListener {
             // The panel, not the app.
             //
@@ -166,17 +218,89 @@ object ChatHeads {
             // Read now, so the badge does not go on counting a chat being looked at.
             view.unread = 0
         }
-        // Newest nearest the thumb, which is the one most likely to be wanted.
+        // In front of the ones already there, so the row grows away from the edge
+        // it is pinned to.
+        //
+        // Appending looked right and read wrong. The row is anchored by its right
+        // side, so a head added at that end takes the place the previous one was
+        // sitting in and shoves it along - every arrival landing in the same spot
+        // while the older heads shuffle sideways. Added at the front, the ones
+        // already up keep their places and the new one appears beside them.
         strip.addView(view, 0)
         heads += Head(conversationId, name, view)
+        restack(app)
 
         // More than a handful stops being a row and becomes a wall across the
         // screen, so the oldest drops off - the same order a shade drops them in.
+        //
+        // **The oldest is the first**, now that the list and the row are built in
+        // the same direction. Taking it from the end was taking the newest: the
+        // fifth head arrived, pushed the count over, and was itself the one removed
+        // - so a fifth conversation could never show a head at all, and the one it
+        // was meant to replace stayed.
+        // The oldest is the first in this list and the *last* in the row, which is
+        // the one against the edge. Removed by reference rather than by index, so
+        // the two orders never have to be reconciled.
         while (heads.size > MAX_HEADS) {
-            val oldest = heads.removeAt(heads.lastIndex)
+            val oldest = heads.removeAt(0)
             runCatching { strip.removeView(oldest.view) }
+            restack(app)
         }
         runCatching { manager.updateViewLayout(strip, params) }
+        // Pinned to its edge again, now that there is one more head in it.
+        //
+        // The window's x is its **left** edge and the row is wrap-content, so a row
+        // resting against the right of the screen grows rightwards as heads are
+        // added - straight off the display. The second head was created, added and
+        // drawn, entirely past the edge, which from the outside is a head that
+        // never came up.
+        reanchor(strip)
+    }
+
+    /**
+     * Lays the heads out: a row while a chat is open, a pile while none is.
+     *
+     * The two states want opposite things. With the panel up the heads are its
+     * tabs - each one has to be reachable, so they spread into a row along the top
+     * and every face can be pressed. With nothing open they are resting on
+     * somebody else's screen, and four circles down the edge is four times as much
+     * of that screen taken for something nobody is using. So they collapse onto
+     * each other, [STACK_STEP_PX] apart: one head to look at, and the rest a stack
+     * of edges behind it saying how many there are.
+     *
+     * The newest is the one on top - see [DragRow.getChildDrawingOrder] - which is
+     * both what a pile means and what makes the pile tappable: the press lands on
+     * the head that arrived last, and the others come back out of it the moment
+     * the panel opens.
+     *
+     * The preview bubble is a child of this row too, and it keeps a real gap
+     * either way: it is a line of text beside the heads, not one of them.
+     *
+     * Capped at [MAX_HEADS], so a row stays a row rather than becoming a bar across
+     * the screen.
+     */
+    private fun restack(context: Context) {
+        val strip = row ?: return
+        val gap = context.dp(HEAD_GAP_DP)
+        // Negative, by design: a margin is how far this head starts after the last
+        // one ended, so a head's own width taken back off it, less a pixel, leaves
+        // each face exactly a pixel to the right of the one in front of it.
+        val between =
+            if (strip.locked) gap else STACK_STEP_PX - context.dp(HEAD_SIZE_DP)
+        var seenHead = false
+        for (i in 0 until strip.childCount) {
+            val child = strip.getChildAt(i)
+            val lp = child.layoutParams as? LinearLayout.LayoutParams ?: continue
+            val head = child is HeadView
+            lp.marginStart = when {
+                i == 0 -> 0
+                head && seenHead -> between
+                // Either the bubble, or the first head after it.
+                else -> gap
+            }
+            if (head) seenHead = true
+            child.layoutParams = lp
+        }
     }
 
     /**
@@ -219,11 +343,88 @@ object ChatHeads {
         val strip = row ?: return@onMain
         val attrs = params ?: return@onMain
         if (parked == null) parked = attrs.x to attrs.y
-        attrs.x = context.dp(EDGE_MARGIN_DP)
+        // Anything already floating beside the heads goes now, for the reason in
+        // [preview]: the panel about to cover the screen says it better.
+        hidePreview()
+        strip.locked = true
+        // Out of the pile and into a row: with a chat under them the heads are the
+        // panel's tabs, and a tab hidden behind the one in front is not one.
+        restack(context)
         attrs.y = context.dp(DOCK_TOP_DP)
+        // Against the right edge, growing leftwards as heads are added, so the one
+        // most recently added stays where the thumb last was rather than shuffling
+        // the whole row sideways each time.
+        attrs.x = rightEdge(manager, strip, context)
         runCatching { manager.updateViewLayout(strip, attrs) }
+        // Measured again once it has been laid out: the first dock of a new head
+        // happens before the row knows how wide it is, and a width of zero would
+        // put it off the right edge entirely.
+        strip.post {
+            val now = params ?: return@post
+            if (!strip.locked) return@post
+            now.x = rightEdge(manager, strip, context)
+            runCatching { manager.updateViewLayout(strip, now) }
+        }
         raise()
         refreshActive()
+    }
+
+    /**
+     * Puts the row back against whichever edge it is resting on.
+     *
+     * After the row has been laid out, because its width is the whole question and
+     * a row that has just gained or lost a head does not have one yet.
+     *
+     * While the panel is open the edge is not in question - it is the right one,
+     * because that is where [dock] puts it - but the re-anchoring still has to
+     * happen, and for exactly the same reason.
+     */
+    private fun reanchor(strip: DragRow) {
+        // Nothing posted here. `post` runs on the next message, which is usually
+        // before the row has been measured again - so the width read is the width
+        // it had *before* the new head, the edge is worked out from that, and the
+        // row ends up one head too far over: the newest sitting where the oldest
+        // was, and the oldest pushed off the screen. That is the whole of "the new
+        // one lands on top of the old one".
+        //
+        // The row says when it knows its own size instead; see [DragRow.onLayout].
+        strip.requestLayout()
+    }
+
+    /** Called by the row once it has measured itself, with the width settled. */
+    private fun anchorToNearestEdge(strip: DragRow) {
+        val manager = windows ?: return
+        val attrs = params ?: return
+        // Docked, the row has an edge already and it is not the nearest one: it is
+        // held against the right with the panel beneath it, and a head arriving
+        // while a chat is open must not send the strip looking for a side.
+        //
+        // It used to return here, and that was the whole of "a head added while the
+        // window is open does not join the row". The window is wrap-content and
+        // positioned by its **left** side, so the row grows rightwards as heads are
+        // added; with the position frozen, the new head took the place the previous
+        // one was sitting in and pushed the older ones off the screen. Re-anchored,
+        // the left edge moves out by the width of a head and the row stays whole.
+        if (strip.locked) {
+            attrs.x = rightEdge(manager, strip, strip.context)
+            runCatching { manager.updateViewLayout(strip, attrs) }
+            return
+        }
+        val screen = Rect().also {
+            @Suppress("DEPRECATION")
+            manager.defaultDisplay.getRectSize(it)
+        }
+        anchor(onLeft = attrs.x + strip.width / 2 < screen.width() / 2)
+    }
+
+    /** Where the row sits when it is pinned to the right of the screen. */
+    private fun rightEdge(manager: WindowManager, strip: View, context: Context): Int {
+        val screen = Rect().also {
+            @Suppress("DEPRECATION")
+            manager.defaultDisplay.getRectSize(it)
+        }
+        val margin = context.dp(EDGE_MARGIN_DP)
+        return (screen.width() - strip.width - margin).coerceAtLeast(margin)
     }
 
     /** Puts it back where the reader had it. */
@@ -231,6 +432,12 @@ object ChatHeads {
         val manager = windows ?: return@onMain
         val strip = row ?: return@onMain
         val attrs = params ?: return@onMain
+        strip.locked = false
+        // Back into a pile, now that there is no chat for them to be the tabs of.
+        restack(strip.context)
+        // Back exactly where it was before the panel took it to the top. The
+        // position was kept at [dock] precisely so that closing is a return rather
+        // than a new guess at where the heads belong.
         parked?.let { (x, y) ->
             attrs.x = x
             attrs.y = y
@@ -270,7 +477,11 @@ object ChatHeads {
      */
     fun preview(context: Context, conversationId: String, text: String) = onMain {
         if (text.isBlank()) return@onMain
-        if (ChatWindow.showing == conversationId) return@onMain
+        // Nothing beside the heads while the panel is open - not just for the chat
+        // being read, for any of them. The panel is already a window onto the
+        // conversation, and a line of a message floating over it is the same thing
+        // said twice, in the smaller and worse of the two places.
+        if (ChatWindow.isOpen) return@onMain
         val manager = windows ?: return@onMain
         val strip = row ?: return@onMain
         val attrs = params ?: return@onMain
@@ -286,6 +497,10 @@ object ChatHeads {
         // left, before them when they sit on the right.
         if (onLeft) strip.addView(fresh) else strip.addView(fresh, 0)
         bubble = fresh
+        // The bubble is a child of the row, so it shifts every head's index along:
+        // without this the head it was put in front of keeps the margin of a first
+        // child, and the pile opens up behind it.
+        restack(context)
 
         // The row is wider now; held to the edge it was on so the heads do not walk.
         strip.post { anchor(onLeft) }
@@ -300,6 +515,7 @@ object ChatHeads {
         val gone = bubble ?: return@onMain
         runCatching { strip.removeView(gone) }
         bubble = null
+        restack(strip.context)
         val manager = windows ?: return@onMain
         val screen = Rect().also {
             @Suppress("DEPRECATION")
@@ -317,9 +533,15 @@ object ChatHeads {
             @Suppress("DEPRECATION")
             manager.defaultDisplay.getRectSize(it)
         }
+        // Tucked part way off the edge at rest, which is what Messenger does and
+        // what keeps a head out of the way of the app underneath: a sliver of the
+        // face is enough to say who it is, and the whole of it comes back the
+        // moment it is picked up. The window already has LAYOUT_NO_LIMITS, which is
+        // what lets it sit past the edge at all.
         val margin = strip.context.dp(EDGE_MARGIN_DP)
-        attrs.x = if (onLeft) margin
-        else (screen.width() - strip.width - margin).coerceAtLeast(margin)
+        val tuck = strip.context.dp(HEAD_SIZE_DP * TUCK_PERCENT / 100)
+        attrs.x = if (onLeft) margin - tuck
+        else (screen.width() - strip.width - margin + tuck).coerceAtLeast(margin - tuck)
         runCatching { manager.updateViewLayout(strip, attrs) }
     }
 
@@ -395,7 +617,18 @@ object ChatHeads {
         if (at < 0) return@onMain
         val head = heads.removeAt(at)
         runCatching { row?.removeView(head.view) }
-        if (heads.isEmpty()) tearDown()
+        if (heads.isEmpty()) {
+            tearDown()
+            return@onMain
+        }
+        // The one that went may have been the first, and the first carries no
+        // margin: left alone, whichever head inherits its place keeps a margin
+        // meant for a head with something in front of it - which in a pile is a
+        // negative one, and the whole stack slides sideways by a head.
+        row?.let {
+            restack(it.context)
+            reanchor(it)
+        }
     }
 
     /** Everything goes: signing out, or the last chat being read. */
@@ -416,6 +649,9 @@ object ChatHeads {
         row = null
         params = null
         windows = null
+        // Otherwise the next row, built for whoever signs in after this, is told it
+        // was docked and never anchors itself.
+        parked = null
     }
 
     /**
@@ -453,12 +689,23 @@ object ChatHeads {
             type,
             // Not focusable, so the app underneath keeps its keyboard and its taps.
             // Without this the overlay swallows everything behind it.
+            // Not locked from this account's own setting, which is what it used to
+            // do. That setting says whether other people may screenshot this
+            // account, and the faces in this row are other people - so the setting
+            // that would cover them is theirs, asked for the person each head
+            // belongs to. The row holds several at once and is given names and
+            // faces rather than ids, so it has nobody to ask about; the panel
+            // underneath, which shows the conversation itself, does and locks
+            // itself accordingly.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = context.dp(EDGE_MARGIN_DP)
+            // Off to the right to begin with, corrected below once the row has a
+            // width. A head arrives on the side it is reached from, and that is the
+            // side the whole row is pinned to when a chat is open.
+            x = context.resources.displayMetrics.widthPixels
             y = context.dp(120)
         }
 
@@ -471,6 +718,9 @@ object ChatHeads {
         // message that was never announced at all.
         runCatching { manager.addView(strip, layout) }
             .onFailure { Log.e(TAG, "The heads window would not open", it) }
+        // Measured rather than guessed: the row has no width until it has been laid
+        // out, and the right edge is the screen minus that width.
+        strip.post { if (parked == null) anchor(onLeft = false) }
         windows = manager
         row = strip
         params = layout
@@ -499,8 +749,47 @@ object ChatHeads {
      */
     private class DragRow(context: Context) : LinearLayout(context) {
 
+        /**
+         * True while the panel is open, and then the row does not move.
+         *
+         * Docked, the heads are a strip belonging to the panel under them - a row
+         * that could be dragged away from the thing it labels would leave the two
+         * in different places with nothing joining them. They go back to being
+         * draggable the moment the panel closes, which is also when they return to
+         * where they were left.
+         */
+        var locked = false
+
+        /**
+         * The width the window was last positioned for.
+         *
+         * A row anchored to an edge has to be moved every time it grows or shrinks,
+         * because the window's x is its left side and the growing happens on the
+         * right. Kept here because this is the only place that knows when the width
+         * has actually changed - a layout pass that did not change it must not move
+         * the window, or every move would ask for another one.
+         */
+        private var anchoredFor = -1
+
         private var manager: WindowManager? = null
         private var layout: WindowManager.LayoutParams? = null
+
+        init {
+            // The newest head is the front of the pile.
+            //
+            // Children are drawn in the order they were added and the newest is
+            // added first, so left alone the *oldest* head would be the one lying
+            // on top - a pile showing the face of whichever conversation arrived
+            // longest ago. Reversed, the newest is drawn last and so sits on top,
+            // and because touches are dispatched in the drawing order reversed, it
+            // is also the one a press on the pile lands on.
+            //
+            // Harmless in a row, where nothing overlaps anything.
+            isChildrenDrawingOrderEnabled = true
+        }
+
+        override fun getChildDrawingOrder(count: Int, position: Int): Int =
+            count - 1 - position
 
         private var downX = 0f
         private var downY = 0f
@@ -527,7 +816,18 @@ object ChatHeads {
             this.layout = layout
         }
 
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            super.onLayout(changed, l, t, r, b)
+            val now = r - l
+            if (now == anchoredFor || now == 0) return
+            anchoredFor = now
+            // After the pass, not during it: moving the window from inside layout is
+            // a layout inside a layout.
+            post { anchorToNearestEdge(this) }
+        }
+
         override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+            if (locked) return false
             val attrs = layout ?: return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -826,11 +1126,40 @@ object ChatHeads {
             textSize = size * 0.22f
         }
 
+        private val caretHeight = context.dp(CARET_HEIGHT_DP)
+        private val caretWidth = context.dp(CARET_WIDTH_DP)
+
+        /**
+         * The pointer under the open one, in the panel's own colour.
+         *
+         * White, and tall enough to reach the panel's top edge, so the two are one
+         * shape: a notch rising out of the window to the face it belongs to. In the
+         * accent colour it was a separate red arrow floating in the gap, which says
+         * the same thing while looking like something else.
+         */
+        private val caret = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+
+        /**
+         * This app's own icon, small, in the corner of the face.
+         *
+         * A head is a person, and a floating circle with a face in it says nothing
+         * about which app it belongs to - which matters when two messengers are
+         * both floating heads on the same screen. Bottom right, because the unread
+         * count already owns the top right.
+         */
+        private val mark = ContextCompat.getDrawable(context, R.mipmap.ic_launcher_round)
+
         init {
             // Software layer, because the shadow under the circle is not drawn by
             // the hardware pipeline on an overlay window.
             setLayerType(LAYER_TYPE_SOFTWARE, null)
-            layoutParams = FrameLayout.LayoutParams(size, size)
+            // Taller than it is wide, by exactly the pointer: the circle keeps its
+            // size and the arrow lives in the space below it, so turning the
+            // pointer on and off never moves the face.
+            layoutParams = FrameLayout.LayoutParams(size, size + caretHeight)
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -860,6 +1189,40 @@ object ChatHeads {
                 canvas.drawText(initial, r, r - mid, letters)
             }
             drawCount(canvas)
+            drawMark(canvas)
+            if (active) drawCaret(canvas)
+        }
+
+        /**
+         * The arrow under the open head.
+         *
+         * Pointing up at the face rather than down at the panel: it is a mark
+         * saying *this* is the one being read, and the panel below it is already
+         * the size of the screen and in no need of being pointed at.
+         */
+        private fun drawCaret(canvas: Canvas) {
+            val middle = width / 2f
+            val top = size.toFloat()
+            val path = android.graphics.Path().apply {
+                moveTo(middle, top)
+                lineTo(middle - caretWidth / 2f, top + caretHeight)
+                lineTo(middle + caretWidth / 2f, top + caretHeight)
+                close()
+            }
+            canvas.drawPath(path, caret)
+        }
+
+        private fun drawMark(canvas: Canvas) {
+            val icon = mark ?: return
+            val side = (size * MARK_PERCENT / 100).coerceAtLeast(1)
+            val inset = context.dp(2)
+            val left = size - side - inset
+            val top = size - side - inset
+            // No disc behind it. The icon is round and carries its own background,
+            // and a white ring around it only made the head look like it had a
+            // sticker on it.
+            icon.setBounds(left, top, left + side, top + side)
+            icon.draw(canvas)
         }
 
         /**
@@ -899,7 +1262,22 @@ object ChatHeads {
     private const val FLING_DP_PER_SECOND = 700
 
     /** How big a head is. */
-    private const val HEAD_SIZE_DP = 60
+    private const val HEAD_SIZE_DP = 72
+
+    /**
+     * The pointer under the head whose chat is open.
+     *
+     * Its height is the gap it has to cross, not a shape anybody chose: the row
+     * docks [DOCK_TOP_DP] down, a head is [HEAD_SIZE_DP] tall, and the panel starts
+     * at `ChatWindow.PANEL_TOP_DP`. Fourteen is what is left between them, so the
+     * tip touches the face and the base meets the window with nothing in between.
+     * Change either of those and this has to change with them.
+     */
+    private const val CARET_HEIGHT_DP = 14
+    private const val CARET_WIDTH_DP = 18
+
+    /** How much of the head the app's own mark takes, in the bottom corner. */
+    private const val MARK_PERCENT = 30
 
     /** The preview beside the heads: how wide, how many lines, how long it stays. */
     private const val PREVIEW_WIDTH_DP = 210
@@ -912,6 +1290,21 @@ object ChatHeads {
     private const val BIN_REACH_DP = 110
 
     /** Enough to keep a conversation going; more is a wall down the screen. */
+    /** The space between one head and the next, now that they sit in a row. */
+    private const val HEAD_GAP_DP = 6
+
+    /** How much of a resting head hangs off the edge of the screen. */
+    private const val TUCK_PERCENT = 28
+
+    /**
+     * How far apart the heads sit once they have collapsed into a pile.
+     *
+     * A pixel, counted in pixels rather than dp because it is not a measurement of
+     * anything - it is the smallest offset there is. All it has to say is that
+     * there is another head back there; the face on top says everything else.
+     */
+    private const val STACK_STEP_PX = 1
+
     private const val MAX_HEADS = 4
 }
 

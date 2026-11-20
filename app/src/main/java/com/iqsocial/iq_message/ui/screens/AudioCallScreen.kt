@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.call.CallAudio
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.call.CallEngine
 import com.iqsocial.iq_message.ui.components.Avatar
@@ -66,6 +67,9 @@ import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.CallPanel
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.CrimsonBright
+import com.iqsocial.iq_message.ui.components.SecureScreen
+import com.iqsocial.iq_message.ui.components.peerAllowsScreenshot
+import com.iqsocial.iq_message.ui.components.watchForScreenshotGesture
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.OnlineGreen
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
@@ -81,6 +85,14 @@ fun AudioCallScreen(
     val d = IqTheme.dimens
     val call = CallCenter.call
     val person = remember(call?.peer) { callerOf(call) }
+
+    // A call is as private as the chat it came from, and the same rule decides it:
+    // the person on the other end says whether they may be screenshotted, and this
+    // phone obeys. This account's own setting is not read here - it is enforced on
+    // their phone, where this account is the peer. Theirs is read off the server,
+    // since nothing in a call's own payload carries it.
+    val peerAllows = peerAllowsScreenshot(call?.peer?.uid)
+    SecureScreen(!peerAllows)
     val toggleCamera = rememberCameraToggle()
     // What the call is actually doing, rather than the assumption that it is up.
     val context = LocalContext.current
@@ -112,6 +124,9 @@ fun AudioCallScreen(
         Modifier
             .fillMaxSize()
             .background(CallBlack)
+            // Only while the call is one the system is blocking; see
+            // [watchForScreenshotGesture].
+            .watchForScreenshotGesture(active = !peerAllows)
     ) {
         // crimson glow bleeding in from the top-right, as in the mockup
         Canvas(Modifier.fillMaxSize()) {
@@ -306,17 +321,10 @@ fun AudioCallScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    Spacer(Modifier.height(d.gapMd))
-                    Text(
-                        "End Call",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontWeight = FontWeight.Normal,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(d.radiusMd))
-                            .clickable(onClick = onEnd)
-                            .padding(horizontal = d.gapLg, vertical = d.gapXs)
-                    )
+                    // No "End Call" line under the row. The red button above the
+                    // panel is the same action, says it in the one shape everybody
+                    // already reads as hanging up, and sits where the thumb is -
+                    // a second way to do it, in words, only asks which one is real.
                 }
 
                 Box(

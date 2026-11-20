@@ -49,7 +49,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,6 +68,7 @@ import android.content.Context
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -131,6 +131,7 @@ import com.iqsocial.iq_message.data.CallNote
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.QuotedMessage
 import com.iqsocial.iq_message.data.auth.SessionStore
+import com.iqsocial.iq_message.data.chat.ChatList
 import com.iqsocial.iq_message.data.chat.ChatMessages
 import com.iqsocial.iq_message.data.chat.Outbox
 import com.iqsocial.iq_message.data.chat.ChatRepository
@@ -150,6 +151,8 @@ import com.iqsocial.iq_message.data.overlay.ChatHeads
 import com.iqsocial.iq_message.data.overlay.ChatWindow
 import com.iqsocial.iq_message.data.profile.MeRepository
 import com.iqsocial.iq_message.data.profile.PresenceRepository
+import androidx.compose.ui.graphics.asAndroidBitmap
+import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.profile.presenceLabel
 import com.iqsocial.iq_message.data.push.MessageNotifications
 import com.iqsocial.iq_message.data.remote.ApiResult
@@ -164,6 +167,9 @@ import com.iqsocial.iq_message.data.remote.MessageInfo
 import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.BubbleShape
+import com.iqsocial.iq_message.ui.components.SecureScreen
+import com.iqsocial.iq_message.ui.components.peerAllowsScreenshot
+import com.iqsocial.iq_message.ui.components.watchForScreenshotGesture
 import com.iqsocial.iq_message.ui.components.ChatWallpaper
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
@@ -192,9 +198,38 @@ fun ChatScreen(
     conversationId: String,
     onBack: () -> Unit,
     onAudioCall: (String) -> Unit,
-    onVideoCall: (String) -> Unit
+    onVideoCall: (String) -> Unit,
+    /**
+     * Opens the person this conversation is with, as a screen of their own.
+     *
+     * Null where there is no navigation stack to push onto - the floating panel
+     * and the system bubble - and there the sheet is used instead, which is what
+     * the whole app did until this screen existed.
+     */
+    onOpenProfile: ((String) -> Unit)? = null,
+    /**
+     * True when this thread is being drawn inside the floating panel.
+     *
+     * The same screen serves three places - the app, the panel over other apps, and
+     * a system bubble - and one thing has to differ between them: whether opening a
+     * chat leaves a head behind. See [ChatHeads.opened].
+     */
+    floating: Boolean = false
 ) {
     SystemBarIcons(darkIcons = true)
+    // PERF PROBE - temporary
+    val openedAt = remember(conversationId) { android.os.SystemClock.elapsedRealtime() }
+    var framed by remember(conversationId) { mutableStateOf(false) }
+    androidx.compose.runtime.SideEffect {
+        if (!framed) {
+            framed = true
+            android.util.Log.i(
+                "ChatPerf",
+                "first composition done in " +
+                    (android.os.SystemClock.elapsedRealtime() - openedAt) + "ms"
+            )
+        }
+    }
     val d = IqTheme.dimens
     val context = LocalContext.current
     val session = remember { SessionStore(context) }
@@ -214,8 +249,35 @@ fun ChatScreen(
      * frame is drawn from what is stored, and the network catches it up afterwards
      * rather than being waited for.
      */
-    val thread by ChatMessages.thread(context, conversationId)
-        .collectAsState(initial = emptyList())
+    /**
+     * How far back the stored thread is read, in messages.
+     *
+     * The screen opens on the newest [ChatMessages.PAGE] and grows by one page at
+     * a time as the top comes into view - see the loader below. Before this, the
+     * whole conversation was read and parsed on every write, which is work that
+     * grows with the history and is spent entirely on rows nobody is looking at.
+     */
+    var window by remember(conversationId) { mutableIntStateOf(ChatMessages.PAGE) }
+
+    /**
+     * The thread, read from this phone's own store.
+     *
+     * Not a list the screen fills and keeps in step. Every write - a fetch, the
+     * socket, this phone sending - goes to the database, and the database says so
+     * here; the screen has no other way of hearing about a message, which is what
+     * makes it impossible for the two to disagree.
+     *
+     * Collected by hand rather than with `collectAsState`, for one reason: the
+     * flow is replaced whenever the window grows, and `collectAsState` would start
+     * the new one at its initial value - emptying the thread for a frame and
+     * blanking the screen at the exact moment somebody is scrolling through it.
+     * Keeping the last list until the next one arrives is the whole difference.
+     */
+    var thread by remember(conversationId) { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    val stored = remember(conversationId, window) {
+        ChatMessages.thread(context, conversationId, window)
+    }
+    LaunchedEffect(stored) { stored.collect { thread = it } }
     var threadError by remember(conversationId) { mutableStateOf<String?>(null) }
 
     /**
@@ -227,6 +289,44 @@ fun ChatScreen(
      * opened the chat, so there is an answer for exactly that gap.
      */
     val peer = remember(remote) { KnownPeople.complete(conversationId, remote?.peer) }
+
+    // The head for the chat being read: created only in the floating panel, where
+    // the heads are the panel's own tabs. In the app it only clears the count on a
+    // head that already exists - opening a chat in the app used to leave a floating
+    // head behind for every person looked at, which nobody asked for.
+    //
+    // Keyed on the face as well as the person: the picture usually lands a moment
+    // after the name does, and a head built from the first of the two would keep
+    // the initial it started with.
+    val peerFace = peer?.profilePicture?.takeIf { it.isNotBlank() }
+    LaunchedEffect(conversationId, peer?.uid, peerFace) {
+        val who = peer ?: return@LaunchedEffect
+        ChatHeads.opened(
+            context = context,
+            conversationId = conversationId,
+            name = who.fullname.ifBlank { "Unknown" },
+            face = peerFace
+                ?.let { RemoteImage.load(it) }
+                ?.let { runCatching { it.asAndroidBitmap() }.getOrNull() },
+            create = floating
+        )
+    }
+
+    // Locked against screenshots when **the person being read** has asked for it,
+    // and on nobody else's say-so.
+    //
+    // This account's own `allow_screenshot` is not consulted here, and that is the
+    // whole of the rule: the setting says whether *other people* may screenshot
+    // you, so it is enforced on their phones, in this same line, with them as the
+    // peer. Applied to this phone as well it did the one thing it was never meant
+    // to - stopped the reader screenshotting their own conversation - and that is
+    // what it did until now.
+    //
+    // The peer's answer comes from the server, not from the `Person` in the
+    // conversation: nothing ever filled that field in. `GET /v1/settings/users/
+    // {uid}` is the question, and [peerAllowsScreenshot] asks it.
+    val peerAllows = peerAllowsScreenshot(peer?.uid, conversationId)
+    SecureScreen(!peerAllows)
 
     /**
      * Whether they are there, from the server rather than from nowhere.
@@ -242,10 +342,19 @@ fun ChatScreen(
     val presence = PresenceRepository.of(peer?.uid.orEmpty())
     LaunchedEffect(peer?.uid, token) {
         val uid = peer?.uid?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
-        PresenceRepository.refresh(token, listOf(uid))
-        // And keep it true while the chat is open, rather than showing where they
-        // were at the moment it opened.
+        // The subscription first, and the snapshot after - not the other way
+        // round, which is how this was written and what made it worse than
+        // useless. `refresh` is a request, and a request that does not come back
+        // holds this coroutine for its whole timeout: with `/v1/presence`
+        // currently hanging, the socket was not subscribed until twenty seconds
+        // after the chat opened, so even a server that did send presence would
+        // have been talking to nobody for those twenty seconds.
+        //
+        // Subscribing costs nothing and cannot block - it is one frame on a socket
+        // that is already up - so it goes first, and the snapshot fills in behind
+        // it whenever it arrives.
         ChatSocket.watchPresence(listOf(uid))
+        PresenceRepository.refresh(token, listOf(uid))
     }
 
     // The header's Person comes from the conversation's peer.
@@ -273,17 +382,41 @@ fun ChatScreen(
     }
     val messages by remember(conversationId) {
         derivedStateOf {
-            sentMessages + UploadQueue.forConversation(conversationId).map { it.toBubble() }
+            val sent = sentMessages
+            // The same message, briefly in both lists, must still be one row.
+            //
+            // An upload hands its message to the outbox and only leaves this list
+            // when the outbox says so, so for a frame or two it is in the thread
+            // *and* still in the queue - and both carry the client id as their id,
+            // because a message the server has not answered for has no other. The
+            // list goes into a `LazyColumn` keyed by that id, and a key used twice
+            // is not a visual glitch:
+            //
+            //     IllegalArgumentException: Key "088f64c2-…" was already used
+            //
+            // thrown from inside the measure pass, which takes the app with it -
+            // every time a picture was sent.
+            val already = sent.mapTo(HashSet(sent.size)) { it.id }
+            sent + UploadQueue.forConversation(conversationId)
+                .map { it.toBubble() }
+                .filterNot { it.id in already }
         }
     }
     // Work out separators once, shared by run grouping and the displayed rows.
     val shown by remember(conversationId) {
         derivedStateOf {
+            val startedAt = android.os.SystemClock.elapsedRealtime()
             val list = messages
             val stamps = list.indices.map { separatorBefore(list, it) }
             val groups = runsIn(list, stamps)
             list.indices.reversed().map { i ->
                 ThreadRow(list[i].copy(group = groups[i]), stamps[i])
+            }.also {
+                android.util.Log.i(
+                    "ChatPerf",
+                    "rows=" + list.size + " built in " +
+                        (android.os.SystemClock.elapsedRealtime() - startedAt) + "ms"
+                )
             }
         }
     }
@@ -369,7 +502,39 @@ fun ChatScreen(
     var previewDismissed by remember(conversationId) { mutableStateOf<String?>(null) }
     /** The link the current card was asked about, as written in the box. */
     var previewOf by remember(conversationId) { mutableStateOf<String?>(null) }
-    val listState = rememberLazyListState(cacheWindow = ThreadCacheWindow)
+    /**
+     * The thread's scroll, with the default prefetch and **no cache window**.
+     *
+     * It had one: half a viewport either side kept composed, so a message was built
+     * while there was still half a screen to scroll before anyone saw it, and one
+     * scrolled just off the top was still there when the thumb came back. A message
+     * is not a plain row - it brings a gesture detector, a bubble shape, text to lay
+     * out and, for a photo or a recording, an effect that goes looking for bytes -
+     * so that was worth having.
+     *
+     * It is off because asking for it is what builds the class that throws:
+     *
+     *     java.util.NoSuchElementException: List is empty.
+     *         at kotlin.collections.CollectionsKt.last(Collections.kt:428)
+     *         at LazyListCacheWindowScope.getLastVisibleLineIndex(…:107)
+     *         at CacheWindowLogic.onDatasetChangedSize(…:241)
+     *         at LazyListState.applyMeasureResult$foundation(…:625)
+     *
+     * `onDatasetChangedSize` runs when the item count has changed since the last
+     * measure and asks which line is the last visible one; measured with nothing
+     * visible, asking for the last of none throws, inside the measure pass, where
+     * there is nothing of ours to catch. Foundation builds that strategy **only**
+     * for a state given a cache window of its own - every other list in this app
+     * takes the default and cannot reach it - so this one line was the whole of the
+     * exposure.
+     *
+     * The thread no longer composes itself empty, which is where the "nothing
+     * visible" came from, and that alone would probably do. Probably is not a word
+     * to leave a crash on: this costs a prefetch heuristic, and the crash costs the
+     * app mid-conversation. Put the window back when Foundation stops throwing -
+     * `rememberLazyListState(cacheWindow = LazyLayoutCacheWindow(0.5f, 0.5f))`.
+     */
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     /** A page of older messages is on its way. */
@@ -406,6 +571,16 @@ fun ChatScreen(
             .filter { it >= 0 }
             .collect {
                 val auth = token ?: return@collect
+
+                // What is already stored comes first. The window holds the newest
+                // page and the rest of the history may well be on this phone
+                // already - asking the server for what is sitting in the database
+                // would be a request to be told what is known.
+                if (thread.size >= window) {
+                    window += ChatMessages.PAGE
+                    return@collect
+                }
+
                 if (loadingOlder || reachedBeginning) return@collect
 
                 val oldest = ChatMessages.lowestSeq(context, conversationId)
@@ -449,6 +624,13 @@ fun ChatScreen(
     }
 
     LaunchedEffect(conversationId, token) {
+        // Who this is, out of the store, before anybody is asked. The thread below
+        // draws from the store and always did; the header did not, so a chat opened
+        // with no connection showed every message under a blank name and no face.
+        ChatList.stored(context, conversationId)?.let { held ->
+            remote = held
+            held.peer?.let { KnownPeople.remember(conversationId, it) }
+        }
         if (token.isNullOrBlank()) return@LaunchedEffect
         when (val c = ConversationsApi.get(token, conversationId)) {
             is ApiResult.Success -> {
@@ -457,7 +639,10 @@ fun ChatScreen(
                 // opened, when the answer may be the thin one.
                 c.data.peer?.let { KnownPeople.remember(conversationId, it) }
             }
-            is ApiResult.Failure -> threadError = c.message
+            // Not an error worth a banner when there is something to show: the
+            // header is filled, the thread is there, and the only thing missing is
+            // how fresh it all is.
+            is ApiResult.Failure -> if (remote == null) threadError = c.message
         }
         when (val page = MessagesApi.history(token, conversationId)) {
             // Written, not assigned. Nothing is cleared first: the store is keyed by
@@ -556,6 +741,10 @@ fun ChatScreen(
                         Outbox.read(context, conversationId, m.seq)
                     }
                 }
+
+                // Not this screen's business: it is about the account, not about
+                // this thread, and it is announced as a notification elsewhere.
+                is ChatSocket.Event.ScreenshotSeen -> Unit
 
                 is ChatSocket.Event.Updated -> ChatMessages.store(context, event.message)
 
@@ -960,7 +1149,14 @@ fun ChatScreen(
 
     // The long-press overlay reaches over the composer and the panels as well,
     // so the screen goes in a box and the overlay is the last thing in it.
-    Box(Modifier.fillMaxSize()) {
+    //
+    // The gesture watch is on the outermost box, and only while this chat is one
+    // the system is blocking: see [watchForScreenshotGesture].
+    Box(
+        Modifier
+            .fillMaxSize()
+            .watchForScreenshotGesture(active = !peerAllows)
+    ) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -977,13 +1173,28 @@ fun ChatScreen(
                 onVideoCall = { onVideoCall(person.id) },
                 onSearch = { searchOpen = true },
                 onShared = { sharedOpen = true },
-                onOpenPeer = { peerOpen = true }
+                // The face and the name open the person; the overflow menu keeps
+                // the conversation's own actions. Pressing somebody's face is a
+                // question about them, not about the chat.
+                onOpenPeer = {
+                    val open = onOpenProfile
+                    if (open != null) open(person.id) else peerOpen = true
+                },
+                onDetails = { peerOpen = true }
             )
 
             Box(Modifier.weight(1f)) {
                 ChatWallpaper()
-                if (messages.isEmpty()) EmptyThread(person.name, threadError)
-                ProvideThreadMedia(conversationId, token) {
+                // Either the thread or the line saying there is none - never both.
+                // It used to be both, the list composed empty behind the message,
+                // and an empty lazy list is not a harmless nothing: it is measured,
+                // with no items and no visible lines, and the first thing to arrive
+                // in it is a change of size. Foundation's prefetch asks which line
+                // was the last visible one at exactly that moment, finds none, and
+                // throws from inside the measure pass - see [listState].
+                if (messages.isEmpty()) {
+                    EmptyThread(person.name, threadError)
+                } else ProvideThreadMedia(conversationId, token) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
@@ -1926,7 +2137,9 @@ private fun ChatTopBar(
     onVideoCall: () -> Unit,
     onSearch: () -> Unit = {},
     onShared: () -> Unit = {},
-    onOpenPeer: () -> Unit = {}
+    onOpenPeer: () -> Unit = {},
+    /** The conversation's own panel: mute, search, shared media. */
+    onDetails: () -> Unit = {}
 ) {
     val d = IqTheme.dimens
     var menuOpen by remember { mutableStateOf(false) }
@@ -2012,6 +2225,13 @@ private fun ChatTopBar(
                     size = d.iconButtonSm
                 )
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Conversation details") },
+                        onClick = {
+                            menuOpen = false
+                            onDetails()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Search in chat") },
                         onClick = {
@@ -2303,38 +2523,6 @@ private fun UploadQueue.Outgoing.toBubble(): Message = Message(
     createdAt = startedAt,
     group = BubbleGroup.SINGLE
 )
-
-/**
- * How much of the thread is built before it is needed, and kept after it is not.
- *
- * The default window is one item ahead in the direction of travel, thrown away the
- * moment it leaves the screen. For a list of plain rows that is enough. A message is
- * not a plain row: it brings a gesture detector, a bubble shape, text to lay out and,
- * for a photo or a recording, an effect that goes looking for bytes. Composing all of
- * that in the one frame between "not needed" and "on screen" is work that has to land
- * somewhere, and it lands on that frame.
- *
- * Half a screen either way, so a message is built while there is still half a screen
- * to scroll before anyone sees it - and a message scrolled just off the top is still
- * there when the thumb comes back for it, which is the case that was asked about.
- *
- * The cost is composing rows that may never be looked at. Bounded here: the window is
- * a fraction of the viewport rather than a count, so it does not grow with the
- * thread, and the fetches those rows start are already behind a limit of three at a
- * time. Raise it if the scroll still catches on a fast fling; lower it if a slow
- * phone starts fetching pictures nobody asked to see.
- *
- * Handed to `rememberLazyListState`, not to `LazyColumn`. Foundation later moved it
- * to a parameter on the composable and deprecated this route, but that parameter does
- * not exist on 1.10.4, which the BOM pins. If the BOM moves far enough forward this
- * will start warning; the fix then is to pass it to the list instead, not to drop it.
- *
- * The opt-in is on this property because it is read at class initialisation, outside
- * any composable - the two that carry one of their own cannot cover it.
- */
-@OptIn(ExperimentalFoundationApi::class)
-private val ThreadCacheWindow =
-    LazyLayoutCacheWindow(aheadFraction = 0.5f, behindFraction = 0.5f)
 
 /**
  * How long a landing message takes to fade in.
@@ -3002,6 +3190,25 @@ private fun VoiceUploadMark(progress: Float, failed: Boolean, color: Color) {
 }
 
 /**
+ * That a note is being fetched, in the circle the play button will come back to.
+ *
+ * Indeterminate, unlike its upload twin above, and not for want of trying: the media
+ * route answers a redirect to a signed link, so the only length available is whatever
+ * that second server declares — and a ring that reaches a quarter and then restarts
+ * from nothing reads as a failure rather than as progress. A voice note is tens of
+ * kilobytes; what is being waited on is the round trip, which has no percentage.
+ */
+@Composable
+private fun VoiceFetchMark(color: Color) {
+    val d = IqTheme.dimens
+    CircularProgressIndicator(
+        modifier = Modifier.size(d.scaled(20)),
+        color = color,
+        strokeWidth = d.scaled(2)
+    )
+}
+
+/**
  * How far a photo has got, over the photo.
  *
  * In the middle of the picture, not under it: the picture is what is being waited
@@ -3251,8 +3458,12 @@ private fun VoiceBubble(message: Message) {
     val d = IqTheme.dimens
     val context = LocalContext.current
     val token = remember { SessionStore(context).token }
-    val scope = rememberCoroutineScope()
     val playing = VoicePlayer.playingId == message.id
+
+    // A received note is downloaded before it can play, and these two are what that
+    // wait looks like from the outside: it is coming, or it did not arrive.
+    val fetching = VoicePlayer.loadingId == message.id
+    val unplayable = VoicePlayer.failedId == message.id
 
     val shape = BubbleShape(
         fromMe = message.fromMe,
@@ -3276,11 +3487,11 @@ private fun VoiceBubble(message: Message) {
                     .size(d.scaled(40))
                     .clip(CircleShape)
                     .background(if (message.fromMe) Color.White else Ink)
-                    // Nothing to play until it has been sent.
+                    // Nothing to play until it has been sent. While it is coming
+                    // down the button stays live, because a tap then means "never
+                    // mind" - the one thing a spinner on its own cannot offer.
                     .clickable(enabled = !sending) {
-                        scope.launch {
-                            VoicePlayer.toggle(context.cacheDir, token, message.id)
-                        }
+                        VoicePlayer.toggle(context.cacheDir, token, message.id)
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -3290,6 +3501,14 @@ private fun VoiceBubble(message: Message) {
                     // being waited for: the ring fills, and when it is gone the
                     // button underneath is the thing you wanted.
                     sending -> VoiceUploadMark(message.uploadProgress, message.uploadFailed, mark)
+                    // The same place again, for the other direction.
+                    fetching -> VoiceFetchMark(mark)
+                    unplayable -> Icon(
+                        IqIcons.Close,
+                        "Could not play. Tap to try again",
+                        Modifier.size(d.iconSm),
+                        tint = mark
+                    )
                     else -> Icon(
                         if (playing) IqIcons.Close else IqIcons.PlayArrow,
                         if (playing) "Stop" else "Play",
@@ -3516,8 +3735,7 @@ private fun Composer(
             if (recording) {
                 RecordingField(recordingMs)
                 Spacer(Modifier.width(d.gapSm))
-            } else
-            Row(
+            } else Row(
                 Modifier
                     .weight(1f)
                     .heightIn(min = d.fieldHeight)

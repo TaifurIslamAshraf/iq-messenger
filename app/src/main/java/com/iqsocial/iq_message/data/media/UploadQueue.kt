@@ -2,6 +2,7 @@ package com.iqsocial.iq_message.data.media
 
 import android.content.Context
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.mutableStateListOf
 import com.iqsocial.iq_message.data.auth.SessionStore
@@ -93,6 +94,51 @@ object UploadQueue {
 
     val outgoing = mutableStateListOf<Outgoing>()
 
+    /**
+     * Held for every change to [outgoing], and the reason is a crash rather than
+     * tidiness.
+     *
+     * The list is written from two directions at once: the composition adds an entry
+     * when something is picked, and an upload coroutine on a background thread
+     * rewrites it several times a second as the bytes go up. Each of those writes
+     * was a pair - find the row, then replace it:
+     *
+     *     val at = outgoing.indexOfFirst { it.clientId == clientId }
+     *     if (at >= 0) outgoing[at] = block(outgoing[at])
+     *
+     * and a pair is not one action. Anything that *removes* a row in between - a
+     * send finishing, a failed one dismissed, another upload completing - moves
+     * every index after it. The write then lands on the wrong row, or, when the row
+     * was the last one, on no row at all:
+     *
+     *     IndexOutOfBoundsException: index 2, size 2
+     *
+     * thrown inside a coroutine with nobody to catch it, which is the whole app.
+     * Rare, and rarest on a fast phone: the slower the upload the more progress
+     * writes there are to collide with, which is exactly the shape of "sometimes,
+     * on some phones, when sending a photo".
+     *
+     * A `SnapshotStateList` is safe to write from two threads; what it cannot do is
+     * make two of those writes into one. That is what this does.
+     */
+    private val lock = Any()
+
+    /** Finds the row and replaces it, with nothing able to move it in between. */
+    private fun change(clientId: String, block: (Outgoing) -> Outgoing) {
+        synchronized(lock) {
+            val at = outgoing.indexOfFirst { it.clientId == clientId }
+            if (at >= 0) outgoing[at] = block(outgoing[at])
+        }
+    }
+
+    private fun addOutgoing(item: Outgoing) {
+        synchronized(lock) { outgoing += item }
+    }
+
+    private fun dropOutgoing(clientId: String) {
+        synchronized(lock) { outgoing.removeAll { it.clientId == clientId } }
+    }
+
     // There was a flow of accepted messages here, for whichever screen was
     // listening. Nothing needs it now: the message goes to the store, and the store
     // is what every thread reads - so a screen hears about it the same way it hears
@@ -103,11 +149,9 @@ object UploadQueue {
         outgoing.filter { it.conversationId == conversationId }
 
     fun retry(context: Context, token: String, clientId: String) {
-        val at = outgoing.indexOfFirst { it.clientId == clientId }
-        if (at < 0) return
-        val item = outgoing[at]
-        outgoing[at] = item.copy(failed = false, error = "", sentBytes = 0L)
-        scope.launch { run(context, token, item.clientId) }
+        if (outgoing.none { it.clientId == clientId }) return
+        change(clientId) { it.copy(failed = false, error = "", sentBytes = 0L) }
+        scope.launch { run(context, token, clientId) }
     }
 
     /**
@@ -118,7 +162,7 @@ object UploadQueue {
      * upload would come back by itself the next time the app started.
      */
     fun discard(context: Context, clientId: String) {
-        outgoing.removeAll { it.clientId == clientId }
+        dropOutgoing(clientId)
         replies -= clientId
         val app = context.applicationContext
         scope.launch {
@@ -150,16 +194,20 @@ object UploadQueue {
         hd: Boolean = true
     ): String {
         val clientId = UUID.randomUUID().toString()
-        outgoing += Outgoing(
+        addOutgoing(Outgoing(
             clientId = clientId,
             conversationId = conversationId,
             uri = uri,
             kind = kind,
             aspect = aspect,
             hd = hd
-        )
+        ))
         replies[clientId] = replyToId
-        scope.launch { run(context, token, clientId) }
+        scope.launch {
+            if (hold(context, clientId, conversationId, uri, kind, aspect, hd, replyToId)) {
+                run(context, token, clientId)
+            }
+        }
         return clientId
     }
 
@@ -181,7 +229,7 @@ object UploadQueue {
         replyToId: String? = null
     ): String {
         val clientId = UUID.randomUUID().toString()
-        outgoing += Outgoing(
+        addOutgoing(Outgoing(
             clientId = clientId,
             conversationId = conversationId,
             uri = Uri.fromFile(file),
@@ -189,13 +237,123 @@ object UploadQueue {
             aspect = 1f,
             durationMs = durationMs,
             waveform = waveform
-        )
+        ))
         replies[clientId] = replyToId
-        scope.launch { run(context, token, clientId) }
+        scope.launch {
+            // Measured from the clip itself when the microphone would not say how
+            // loud it was. Several phones return nothing from `maxAmplitude` - this
+            // one among them - and a voice note from one of them arrived with no
+            // shape at all, drawn as the flat line meant for messages that never
+            // had one. Here rather than in the recorder because it is a decode: tens
+            // of milliseconds, off the main thread, and the release gesture should
+            // not wait for it.
+            val shape = waveform.ifEmpty { VoiceShape.measure(file) }
+            if (shape.isNotEmpty() && waveform.isEmpty()) {
+                // The bubble is already on screen and already flat; this is the
+                // moment it stops being.
+                change(clientId) { it.copy(waveform = shape) }
+            }
+            // The recording is already a file of ours, so there is nothing to copy -
+            // it is held where it was made.
+            if (hold(
+                    context, clientId, conversationId, Uri.fromFile(file), "voice",
+                    aspect = 1f, hd = true, replyToId = replyToId,
+                    durationMs = durationMs, waveform = shape, copy = false
+                )
+            ) {
+                run(context, token, clientId)
+            }
+        }
         return clientId
     }
 
     private val replies = mutableMapOf<String, String?>()
+
+    /**
+     * Takes hold of the bytes, before anything is prepared.
+     *
+     * This is the first thing that happens to a picked file, and it is the whole
+     * point: until the bytes are somewhere of ours with a row pointing at them, an
+     * upload exists only in this process. Preparing a photo takes a second or two,
+     * and the app being killed in that second used to lose it outright - which is
+     * exactly the second it is most likely to be killed in, because preparing a
+     * large photo is the most memory the app ever asks for.
+     *
+     * The row goes in with a blank declaration, which is what marks it as not yet
+     * prepared. [run] finishes the job, here or after a restart.
+     */
+    private suspend fun hold(
+        context: Context,
+        clientId: String,
+        conversationId: String,
+        uri: Uri,
+        kind: String,
+        aspect: Float,
+        hd: Boolean,
+        replyToId: String?,
+        durationMs: Long = 0L,
+        waveform: List<Int> = emptyList(),
+        copy: Boolean = true
+    ): Boolean {
+        val app = context.applicationContext
+        val dir = File(app.cacheDir, "uploads").apply { mkdirs() }
+        val held = runCatching {
+            if (!copy) File(uri.path!!)
+            else File(dir, clientId + suffixFor(app, uri)).also { out ->
+                MediaPreparer.open(app, uri)!!.use { input ->
+                    out.outputStream().use(input::copyTo)
+                }
+            }
+        }.getOrNull()
+
+        if (held == null || !held.exists()) {
+            change(clientId) { it.copy(failed = true, error = "Could not read that file") }
+            return false
+        }
+
+        ChatStore.of(app).chats().putUpload(
+            UploadRow(
+                clientId = clientId,
+                conversationId = conversationId,
+                path = held.absolutePath,
+                thumbPath = "",
+                // Blank: nothing has been measured yet.
+                body = "",
+                size = 0L,
+                kind = kind,
+                aspect = aspect,
+                hd = hd,
+                durationMs = durationMs,
+                waveform = JSONArray(waveform).toString(),
+                replyToId = replyToId.orEmpty(),
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        return true
+    }
+
+    /**
+     * The extension the copy is given, taken from what the source says it is.
+     *
+     * Not decoration, and not cosmetic: it is the only thing that still knows what
+     * the file is by the time it is prepared. [MediaPreparer.prepare] runs against
+     * *this* copy rather than the picked file - the picked file's permission dies
+     * with the process, which is why there is a copy at all - and it asks the system
+     * what type it is. For a `file://` path the system has nothing to go on but the
+     * name, so a copy called `.src` came back as "application/octet-stream", which
+     * is not a picture of anything: every photo chosen from the gallery was then
+     * declared, uploaded and delivered as a **document**.
+     *
+     * Read here because here is the last moment it can be: the `content://` grant
+     * that answers this question is gone a moment later.
+     */
+    private fun suffixFor(context: Context, uri: Uri): String {
+        val mime = context.contentResolver.getType(uri).orEmpty()
+        val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime).orEmpty()
+        // Something the system has no name for is a document, and `.src` says so as
+        // well as anything else would.
+        return if (extension.isBlank()) ".src" else ".$extension"
+    }
 
     /**
      * Picks up uploads that were interrupted.
@@ -228,7 +386,7 @@ object UploadQueue {
             }
             // The bubble comes back first, so a thread reopened after a restart
             // shows what is still going rather than a gap where it was.
-            outgoing += row.toOutgoing()
+            addOutgoing(row.toOutgoing())
             replies[row.clientId] = row.replyToId.takeIf { it.isNotBlank() }
             run(app, token, row.clientId)
         }
@@ -242,15 +400,30 @@ object UploadQueue {
      * and the queue may not get it away for hours.
      */
     fun handedOver(clientId: String) {
-        outgoing.removeAll { it.clientId == clientId }
+        dropOutgoing(clientId)
         replies -= clientId
     }
 
-    private suspend fun run(context: Context, token: String, clientId: String) {
-        fun update(block: (Outgoing) -> Outgoing) {
-            val at = outgoing.indexOfFirst { it.clientId == clientId }
-            if (at >= 0) outgoing[at] = block(outgoing[at])
+    /**
+     * Signing out: nothing here is the next account's to send.
+     *
+     * The rows go with the rest of the store, but the bytes do not - they are files
+     * in this app's cache, and a photo somebody chose to send stays on disk under
+     * its own name until something deletes it. The in-memory list goes too, or the
+     * next person to sign in would find a stranger's photo half-uploaded in a
+     * conversation they cannot open.
+     */
+    fun clear(context: Context) {
+        synchronized(lock) { outgoing.clear() }
+        replies.clear()
+        val app = context.applicationContext
+        scope.launch {
+            runCatching { File(app.cacheDir, "uploads").deleteRecursively() }
         }
+    }
+
+    private suspend fun run(context: Context, token: String, clientId: String) {
+        fun update(block: (Outgoing) -> Outgoing) = change(clientId, block)
 
         /**
          * Marks the entry, telling apart "refused" from "not tried yet".
@@ -267,30 +440,37 @@ object UploadQueue {
         val dao = ChatStore.of(context).chats()
         update { it.copy(waiting = false, failed = false, error = "") }
 
-        // Prepared and copied into our own cache the first time, then driven from
-        // the row. That copy is what lets this be picked up again after a restart,
-        // and it is made from the one read of the source that was needed anyway.
-        val row = dao.upload(clientId) ?: run {
-            val item = outgoing.firstOrNull { it.clientId == clientId } ?: return
-            val prepared = if (item.kind == "voice") {
-                val file = item.uri.path?.let(::File)
-                if (file == null || !file.exists()) {
-                    stop("The recording is gone", offline = false)
-                    return
-                }
-                MediaPreparer.voiceUpload(file, item.durationMs, item.waveform)
-            } else {
-                MediaPreparer.prepare(context, item.uri, hd = item.hd).getOrElse {
-                    stop(it.message ?: "Could not read that file", offline = false)
-                    return
-                }
+        // Everything from here is driven by the row, which [hold] wrote before any
+        // of this started. A blank declaration on it means the bytes are held but
+        // not yet measured - the state a restart can land in.
+        val stored = dao.upload(clientId) ?: return
+        val row = if (stored.body.isNotBlank()) stored else {
+            val source = File(stored.path)
+            if (!source.exists()) {
+                // Held once and gone since: the cache was cleared, or a recording
+                // was deleted. Nothing to send and nothing to retry.
+                dao.dropUpload(clientId)
+                stop("That file is no longer there", offline = false)
+                return
             }
-            val kept = keep(context, clientId, prepared) ?: run {
+            val prepared = if (stored.kind == "voice") {
+                MediaPreparer.voiceUpload(source, stored.durationMs, stored.waveform.toBars())
+            } else {
+                MediaPreparer.prepare(context, Uri.fromFile(source), hd = stored.hd)
+                    .getOrElse {
+                        stop(it.message ?: "Could not read that file", offline = false)
+                        return
+                    }
+            }
+            val ready = keep(context, stored, prepared) ?: run {
                 stop("No room to keep that file", offline = false)
                 return
             }
-            dao.putUpload(kept)
-            kept
+            dao.putUpload(ready)
+            // The raw copy has been measured and rewritten; only a recording, which
+            // was never copied, keeps the same file.
+            if (ready.path != stored.path) runCatching { source.delete() }
+            ready
         }
 
         update { it.copy(totalBytes = row.size) }
@@ -377,8 +557,12 @@ object UploadQueue {
      * The declaration is kept beside them because it was measured from these exact
      * bytes. Null if the write failed, which on a full disk it can.
      */
-    private fun keep(context: Context, clientId: String, prepared: MediaPreparer.Prepared): UploadRow? {
-        val item = outgoing.firstOrNull { it.clientId == clientId } ?: return null
+    private fun keep(
+        context: Context,
+        row: UploadRow,
+        prepared: MediaPreparer.Prepared
+    ): UploadRow? {
+        val clientId = row.clientId
         val dir = File(context.cacheDir, "uploads").apply { mkdirs() }
         return runCatching {
             val payload = File(dir, "$clientId.bin")
@@ -392,19 +576,11 @@ object UploadQueue {
                 File(dir, "$clientId.thumb").apply { writeBytes(it) }
             }
 
-            UploadRow(
-                clientId = clientId,
-                conversationId = item.conversationId,
+            row.copy(
                 path = payload.absolutePath,
                 thumbPath = thumb?.absolutePath.orEmpty(),
                 body = prepared.body.toString(),
-                size = prepared.size,
-                kind = item.kind,
-                aspect = item.aspect,
-                durationMs = item.durationMs,
-                waveform = JSONArray(item.waveform).toString(),
-                replyToId = replies[clientId].orEmpty(),
-                createdAt = item.startedAt
+                size = prepared.size
             )
         }.getOrNull()
     }
@@ -412,9 +588,12 @@ object UploadQueue {
     private fun UploadRow.toOutgoing(): Outgoing = Outgoing(
         clientId = clientId,
         conversationId = conversationId,
+        // The held bytes either way: the raw copy before it is measured, the
+        // prepared one after. Both draw the same picture in the bubble.
         uri = Uri.fromFile(File(path)),
         kind = kind,
         aspect = aspect,
+        hd = hd,
         totalBytes = size,
         durationMs = durationMs,
         waveform = waveform.toBars(),

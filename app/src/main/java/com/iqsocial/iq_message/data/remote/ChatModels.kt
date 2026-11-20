@@ -20,7 +20,21 @@ data class ChatPerson(
     val fullname: String,
     val profilePicture: String,
     val verified: Int,
-    val badgeKey: String
+    val badgeKey: String,
+    /**
+     * Whether this person lets other people screenshot them.
+     *
+     * Read here, where the peer arrives, so that the screens showing them can lock
+     * their own window. **The server does not send it yet** - `Person` in the API
+     * description carries the name, the picture and the badge and nothing else - so
+     * today this is always the default. It is parsed rather than left out because
+     * the alternative is finding every peer again later: the day the field appears,
+     * the blocking starts working with nothing further to change.
+     *
+     * Allowed when absent, which is the server's own default and the only honest
+     * way round: a block nobody has been told about is not a block.
+     */
+    val allowScreenshot: Boolean = true
 ) {
     val isVerified: Boolean get() = verified != 0
 
@@ -30,7 +44,8 @@ data class ChatPerson(
             fullname = json.string("fullname").trim(),
             profilePicture = json.string("profile_picture"),
             verified = json.optInt("verified"),
-            badgeKey = json.string("badge_key")
+            badgeKey = json.string("badge_key"),
+            allowScreenshot = json.optBoolean("allow_screenshot", true)
         )
     }
 }
