@@ -158,7 +158,9 @@ import com.iqsocial.iq_message.data.push.MessageNotifications
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatConversation
 import com.iqsocial.iq_message.data.remote.ChatMessage
+import com.iqsocial.iq_message.data.remote.ConversationAccess
 import com.iqsocial.iq_message.data.remote.ConversationsApi
+import com.iqsocial.iq_message.data.remote.RequestSide
 import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.LinkPreview
 import com.iqsocial.iq_message.data.remote.LinkPreviewApi
@@ -289,6 +291,15 @@ fun ChatScreen(
      * opened the chat, so there is an answer for exactly that gap.
      */
     val peer = remember(remote) { KnownPeople.complete(conversationId, remote?.peer) }
+
+    /**
+     * What this account may do here: answer a message request, or write at all.
+     *
+     * [ConversationAccess.OPEN] until the conversation has been read, which is the
+     * right thing to show for the moment before it arrives - a bar that flashed Accept
+     * and Reject at everybody on the way in would be wrong far more often than not.
+     */
+    val access = remote?.access ?: ConversationAccess.OPEN
 
     // The head for the chat being read: created only in the floating panel, where
     // the heads are the panel's own tabs. In the app it only clears the count on a
@@ -687,9 +698,21 @@ fun ChatScreen(
     // the chat list's business, not this screen's.
     // Reconnecting means the socket was down, and anything sent in that window
     // never arrived as an event. `after_seq` is the only way to find it.
+    var wasDown by remember(conversationId) { mutableStateOf(false) }
     LaunchedEffect(conversationId, ChatSocket.connected) {
-        if (!ChatSocket.connected) return@LaunchedEffect
+        if (!ChatSocket.connected) {
+            wasDown = true
+            return@LaunchedEffect
+        }
         val auth = token ?: return@LaunchedEffect
+        // `conversation:access` is only heard while the socket is up. A request
+        // answered during a drop would leave this screen locked or unlocked on the
+        // strength of what it last knew, so coming back reads the conversation again.
+        if (wasDown) {
+            wasDown = false
+            (ConversationsApi.get(auth, conversationId) as? ApiResult.Success)
+                ?.let { remote = it.data }
+        }
         val lastSeq = ChatMessages.highestSeq(context, conversationId)
             .takeIf { it > 0 } ?: return@LaunchedEffect
         when (val page = MessagesApi.since(auth, conversationId, lastSeq)) {
@@ -747,6 +770,12 @@ fun ChatScreen(
                 is ChatSocket.Event.ScreenshotSeen -> Unit
 
                 is ChatSocket.Event.Updated -> ChatMessages.store(context, event.message)
+
+                is ChatSocket.Event.AccessChanged -> {
+                    if (event.conversationId == conversationId) {
+                        remote = remote?.copy(access = event.access)
+                    }
+                }
 
                 is ChatSocket.Event.ReceiptChanged -> {
                     if (event.receipt.conversationId == conversationId) {
@@ -1147,6 +1176,26 @@ fun ChatScreen(
         }
     }
 
+    var answering by remember(conversationId) { mutableStateOf(false) }
+
+    /**
+     * Accepts or rejects the message request in this conversation.
+     *
+     * Waits for the server: the bar is only taken down by its answer, so a refusal
+     * leaves the buttons where they were, with the reason above the composer.
+     */
+    fun answerRequest(accept: Boolean) {
+        if (answering) return
+        answering = true
+        scope.launch {
+            when (val r = ChatRepository.answerRequest(token, conversationId, accept)) {
+                is ApiResult.Success -> remote = r.data
+                is ApiResult.Failure -> threadError = r.message
+            }
+            answering = false
+        }
+    }
+
     // The long-press overlay reaches over the composer and the panels as well,
     // so the screen goes in a box and the overlay is the last thing in it.
     //
@@ -1182,6 +1231,23 @@ fun ChatScreen(
                 },
                 onDetails = { peerOpen = true }
             )
+
+            // At the top, where it cannot be missed and does not cover the messages.
+            // Writing back is allowed meanwhile: replying does not accept.
+            when (access.request) {
+                RequestSide.INCOMING ->
+                    MessageRequestBar(
+                        name = person.name,
+                        busy = answering,
+                        onAccept = { answerRequest(true) },
+                        onReject = { answerRequest(false) }
+                    )
+
+                RequestSide.REJECTED ->
+                    RejectedRequestBar(busy = answering, onAccept = { answerRequest(true) })
+
+                else -> Unit
+            }
 
             Box(Modifier.weight(1f)) {
                 ChatWallpaper()
@@ -1342,7 +1408,9 @@ fun ChatScreen(
             }
 
 
-            Composer(
+            if (!access.canSend) {
+                WaitingForAccept(person.name)
+            } else Composer(
                 draft = draft,
                 emojiOpen = emojiOpen,
                 onToggleEmoji = {
@@ -1799,6 +1867,136 @@ private fun ActionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
         Icon(icon, null, Modifier.size(d.icon), tint = Ink)
         Spacer(Modifier.width(d.gapMd))
         Text(label, style = MaterialTheme.typography.titleMedium, color = Ink)
+    }
+}
+
+/**
+ * Somebody who has never been accepted wrote to this account.
+ *
+ * Accept lets them write freely and puts them on the people list; Reject leaves them
+ * waiting without ever telling them. Both are answered by the server before the bar
+ * goes, and [busy] keeps a second tap from asking twice.
+ */
+@Composable
+private fun MessageRequestBar(
+    name: String,
+    busy: Boolean,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    val d = IqTheme.dimens
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White)
+            .padding(horizontal = d.gutter, vertical = d.gapMd)
+    ) {
+        Text(
+            "$name wants to send you messages",
+            style = MaterialTheme.typography.titleMedium,
+            color = Ink,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(d.gapXs))
+        Text(
+            "They can't send more until you accept. They won't be told if you reject.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkMuted
+        )
+        Spacer(Modifier.height(d.gapMd))
+        Row(horizontalArrangement = Arrangement.spacedBy(d.gapSm)) {
+            RequestButton("Reject", filled = false, enabled = !busy, onClick = onReject, modifier = Modifier.weight(1f))
+            RequestButton("Accept", filled = true, enabled = !busy, onClick = onAccept, modifier = Modifier.weight(1f))
+        }
+    }
+    HairlineDivider()
+}
+
+/** What stays once a request has been rejected: a way back, and nothing louder. */
+@Composable
+private fun RejectedRequestBar(busy: Boolean, onAccept: () -> Unit) {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White)
+            .padding(horizontal = d.gutter, vertical = d.gapSm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "You rejected this message request",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkMuted,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "Accept",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (busy) InkFaint else Crimson,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable(enabled = !busy, onClick = onAccept)
+                .padding(horizontal = d.gapMd, vertical = d.gapSm)
+        )
+    }
+    HairlineDivider()
+}
+
+@Composable
+private fun RequestButton(
+    label: String,
+    filled: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val d = IqTheme.dimens
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier
+            .clip(shape)
+            .then(
+                if (filled) Modifier.background(if (enabled) Crimson else InkFaint)
+                else Modifier.border(1.dp, Hairline, shape)
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = d.gapMd),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (filled) Color.White else if (enabled) Ink else InkFaint,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+/**
+ * Takes the composer's place while this account's one message waits to be accepted.
+ *
+ * The same text whether the request is pending or was rejected: the requester is
+ * never told which, so nothing here may give it away.
+ */
+@Composable
+private fun WaitingForAccept(name: String) {
+    val d = IqTheme.dimens
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White)
+    ) {
+        HairlineDivider()
+        Text(
+            "Waiting for $name to accept your message request",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.gutter, vertical = d.gapLg)
+        )
     }
 }
 

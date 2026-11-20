@@ -51,6 +51,18 @@ object ChatSocket {
          * place that reads it is the one place that has to be tolerant about it.
          */
         data class ScreenshotSeen(val payload: org.json.JSONObject) : Event
+
+        /**
+         * What this account may do in a conversation changed: a message request was
+         * sent, accepted or rejected, or calls were turned on or off.
+         *
+         * Already worked out from this account's own side, so it is applied as it
+         * stands. A rejection is only ever sent to the account that rejected.
+         */
+        data class AccessChanged(
+            val conversationId: String,
+            val access: ConversationAccess
+        ) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 64)
@@ -107,6 +119,16 @@ object ChatSocket {
             on("message:updated") { args -> args.firstObject()?.let { emitMessage(it, ::Updated) } }
             on("message:receipt") { args ->
                 args.firstObject()?.let { _events.tryEmit(Event.ReceiptChanged(Receipt.from(it))) }
+            }
+            on("conversation:access") { args ->
+                val json = args.firstObject() ?: return@on
+                val id = json.string("conversation_id")
+                // No `access` object would parse as fully open, which would unlock a
+                // composer on the strength of a malformed frame. Ignored instead.
+                if (id.isBlank() || json.optJSONObject("access") == null) return@on
+                _events.tryEmit(
+                    Event.AccessChanged(id, ConversationAccess.from(json.optJSONObject("access")))
+                )
             }
 
             // Calls go straight to the centre rather than out as events. They are not

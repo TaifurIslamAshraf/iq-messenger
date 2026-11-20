@@ -226,6 +226,31 @@ object ChatRepository {
         return null
     }
 
+    /**
+     * Answers the message request in a conversation, and hands back the conversation
+     * as it now stands.
+     *
+     * Not queued like [setUnread]. An answer is something the other person is waiting
+     * on, and one that sat in a queue behind a dead network would say "accepted" on
+     * this screen while the requester still could not write - so it is made, or it is
+     * refused out loud and the buttons stay.
+     */
+    suspend fun answerRequest(
+        token: String?,
+        id: String,
+        accept: Boolean
+    ): ApiResult<ChatConversation> {
+        if (token.isNullOrBlank()) return ApiResult.Failure("Not signed in")
+        val result = if (accept) ConversationsApi.accept(token, id)
+        else ConversationsApi.reject(token, id)
+        if (result is ApiResult.Success) {
+            // Kept, so the chat opens the same way next time with no connection.
+            store?.let { ChatList.store(it, listOf(result.data)) }
+            invalidate()
+        }
+        return result
+    }
+
     suspend fun delete(token: String?, id: String): String? =
         act(token) { ConversationsApi.deleteForMe(it, id) }
 
