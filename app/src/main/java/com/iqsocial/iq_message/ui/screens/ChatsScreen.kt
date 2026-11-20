@@ -68,6 +68,7 @@ import com.iqsocial.iq_message.data.profile.PresenceRepository
 import com.iqsocial.iq_message.data.remote.ChatSocket
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatConversation
+import com.iqsocial.iq_message.data.remote.RequestSide
 import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.data.remote.LastMessage
 import com.iqsocial.iq_message.data.remote.MessageHit
@@ -593,6 +594,20 @@ private fun ConversationRow(
                 if (peer?.isVerified == true) {
                     Spacer(Modifier.width(d.gapXs))
                     Icon(IqIcons.Verified, "Verified", Modifier.size(d.iconSm), tint = Crimson)
+                }
+                // Not accepted yet: opening the row is where Accept and Reject are.
+                if (conversation.access.request == RequestSide.INCOMING) {
+                    Spacer(Modifier.width(d.gapSm))
+                    Text(
+                        "Request",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Crimson,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .background(CrimsonTint, RoundedCornerShape(50))
+                            .padding(horizontal = d.gapSm, vertical = d.gapXs / 2)
+                    )
                 }
             }
             Spacer(Modifier.height(d.gapXs / 2))

@@ -133,6 +133,38 @@ object ConversationsApi {
             MessengerConfig.BASE_URL
         ).mapTo { }
 
+    /* -- message requests ----------------------------------------------------- */
+
+    /**
+     * Lets the person who wrote to this account write freely, and puts them on this
+     * account's people. Also works on a request rejected earlier.
+     *
+     * 409 when there is no request to this account here: nobody has written yet,
+     * this account is the one that asked, or it was answered already.
+     */
+    suspend fun accept(token: String, id: String): ApiResult<ChatConversation> =
+        answer(token, id, "accept")
+
+    /**
+     * Turns a request down. The other person is never told and keeps waiting; only
+     * this account's own devices hear of it. Safe to repeat, and can be undone with
+     * [accept].
+     */
+    suspend fun reject(token: String, id: String): ApiResult<ChatConversation> =
+        answer(token, id, "reject")
+
+    private suspend fun answer(
+        token: String,
+        id: String,
+        action: String
+    ): ApiResult<ChatConversation> =
+        ApiClient.post(
+            "/v1/conversations/${Uri.encode(id)}/$action",
+            JSONObject(),
+            token,
+            MessengerConfig.BASE_URL
+        ).mapTo(ChatConversation::from)
+
     private suspend fun act(token: String, id: String, action: String): ApiResult<Unit> =
         ApiClient.post(
             "/v1/conversations/${Uri.encode(id)}/$action",
