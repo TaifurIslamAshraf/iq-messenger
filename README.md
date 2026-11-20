@@ -550,7 +550,7 @@ to the main backend's `/v1/api/login`.
 
 | Tag | Count | Routes |
 |---|---|---|
-| Conversations | 15 | list, get, open, search, unread-count, pin/unpin, mute/unmute, archive/unarchive, read/unread, delivered, delete |
+| Conversations | 17 | list, get, open, search, unread-count, pin/unpin, mute/unmute, archive/unarchive, read/unread, delivered, delete, accept/reject |
 | Messages | 13 | page, send, edit, forward, react/unreact, delete for me / for everyone, search (global and in-conversation), shared media, info, changes |
 | Media | 4 | create upload, complete upload, download, thumbnail |
 | Contacts | 2 | sync, single |
@@ -829,7 +829,7 @@ Two behaviours worth knowing, both confirmed rather than assumed:
 
 ### Every route has a caller
 
-All 28 Conversations and Messages routes are reachable from the UI - not merely
+All 30 Conversations and Messages routes are reachable from the UI - not merely
 implemented. Where each one lives:
 
 | Surface | Routes it drives |
@@ -837,6 +837,7 @@ implemented. Where each one lives:
 | Chat list | `list` (both folders), `search`, `unread-count` |
 | Conversation long-press | `pin`/`unpin`, `mute`/`unmute`, `archive`/`unarchive`, `read`/`unread`, `DELETE` |
 | Opening a chat | `get`, `messages` (history), `changes`, `read` |
+| Message request bar | `accept`, `reject` |
 | Socket reconnect | `messages?after_seq`, `delivered` |
 | Composer | `POST /messages`, `PATCH /messages/{id}` |
 | Message long-press | `reaction` (put/delete), `delete-for-me`, `delete-for-everyone`, `forward`, `info` |
@@ -1059,6 +1060,33 @@ while the app was away: none of them move a message's `seq`, so history alone wo
 never show them. The resume point is `synced_at` from the last page, kept per
 conversation in `ChatRepository` for the life of the process.
 
+### Message requests
+
+Somebody never accepted sends **one** message; it is their request. The server puts
+the answer in each conversation's `access`, worked out from the reader's own side:
+
+| `access.request` | Meaning | What the chat shows |
+|---|---|---|
+| `incoming` | They wrote to this account | **Accept / Reject** bar under the header. The composer stays open: replying does not accept |
+| `outgoing` | This account wrote first | Composer replaced by "Waiting for … to accept". Also after a rejection - the requester is never told |
+| `rejected` | This account rejected it | A one-line bar with **Accept**, which still works |
+| `null` | No request | Normal chat |
+
+A missing `access` is open both ways, so chats from before this existed are untouched.
+`ConversationAccess` / `RequestSide` in `ChatModels.kt` parse it; the stored chat-list rows
+keep the raw JSON, so they carry it too.
+
+- **Answering waits for the server** (`ChatRepository.answerRequest`), unlike mark-unread: an
+  "accepted" that sat in the outbox would leave the requester locked out while this screen
+  said otherwise. A refusal keeps the buttons and shows the reason.
+- **`conversation:access`** keeps both sides current, and `SocketAlerts` re-reads the list on it
+  so the **Request** chip on a row appears and goes without opening the chat. The socket is
+  only heard while it is up, so an open chat also re-reads its conversation after a reconnect.
+- **A send refused with `MESSAGE_REQUEST_PENDING`** (a second message queued offline, say) is
+  given up on at once instead of three times, so it cannot hold the outbox for other chats.
+- Calls are not wired: `access.canCall` / `peerCanCall` are parsed, and
+  `PUT /v1/conversations/{id}/calls` is not called anywhere yet.
+
 ### Realtime: Socket.IO, undocumented but present
 
 The spec names socket events without saying where the socket is, so the endpoint was
@@ -1072,8 +1100,8 @@ found by probing. It is **Socket.IO v4 at `/socket.io/` on the same host**:
 | Keepalive | `pingInterval` 25 s, `pingTimeout` 20 s |
 | Payload | wrapped: `42["message:updated",{"message":{…}}]` |
 
-Events: `message:new`, `message:updated`, `message:receipt`, and `message:delivered`
-/ `message:send` to emit.
+Events: `message:new`, `message:updated`, `message:receipt`, `conversation:access`, and
+`message:delivered` / `message:send` to emit.
 
 > **A sender does not receive their own `message:new`.** It goes to the *other*
 > members, which is why a single-account test sees nothing. `message:updated` does

@@ -79,6 +79,60 @@ data class LastMessage(
     }
 }
 
+/** Which side of a message request the caller is on. */
+enum class RequestSide {
+    /** Somebody wrote to this account and is waiting for an answer. */
+    INCOMING,
+
+    /** This account wrote first and is waiting. Also after a rejection: it is never shown. */
+    OUTGOING,
+
+    /** This account rejected theirs. It can still be accepted. */
+    REJECTED;
+
+    companion object {
+        fun from(wire: String): RequestSide? = when (wire) {
+            "incoming" -> INCOMING
+            "outgoing" -> OUTGOING
+            "rejected" -> REJECTED
+            else -> null
+        }
+    }
+}
+
+/**
+ * What this account may do in a conversation, from its own side.
+ *
+ * An absent `access` is [OPEN]: conversations from before per-person permissions
+ * carry none, and a field nobody sent is not a restriction.
+ */
+@Immutable
+data class ConversationAccess(
+    val request: RequestSide?,
+    val canSend: Boolean,
+    val canCall: Boolean,
+    val peerCanCall: Boolean
+) {
+    companion object {
+        val OPEN = ConversationAccess(
+            request = null,
+            canSend = true,
+            canCall = true,
+            peerCanCall = true
+        )
+
+        fun from(json: JSONObject?): ConversationAccess {
+            if (json == null) return OPEN
+            return ConversationAccess(
+                request = RequestSide.from(json.string("request")),
+                canSend = json.optBoolean("can_send", true),
+                canCall = json.optBoolean("can_call", true),
+                peerCanCall = json.optBoolean("peer_can_call", true)
+            )
+        }
+    }
+}
+
 @Immutable
 data class ChatConversation(
     val id: String,
@@ -101,6 +155,8 @@ data class ChatConversation(
     /** When a timed mute ends; 0 when not muted, or muted for good. */
     val mutedUntil: Long,
     val createdAt: Long,
+    /** Message request and call permissions, as this account sees them. */
+    val access: ConversationAccess = ConversationAccess.OPEN,
     /**
      * The row as the API sends it, kept so the stored copy and the received copy
      * are the same thing - read back by this same parser rather than a second one.
@@ -126,6 +182,7 @@ data class ChatConversation(
             muted = json.optBoolean("muted"),
             mutedUntil = json.optLong("muted_until"),
             createdAt = json.optLong("created_at"),
+            access = ConversationAccess.from(json.optJSONObject("access")),
             raw = json.toString()
         )
     }

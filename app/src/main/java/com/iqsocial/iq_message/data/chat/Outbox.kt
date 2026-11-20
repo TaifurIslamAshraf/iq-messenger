@@ -58,6 +58,9 @@ object Outbox {
      */
     private const val MAX_ATTEMPTS = 3
 
+    /** `responseObject.code` of the 403 a send gets while its request waits. */
+    private const val REQUEST_PENDING = "MESSAGE_REQUEST_PENDING"
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val draining = Mutex()
     private var runner: Job? = null
@@ -390,7 +393,7 @@ object Outbox {
                 is Outcome.Refused -> {
                     val tried = work.attempts + 1
                     dao.failed(work.id, outcome.why)
-                    if (tried < MAX_ATTEMPTS) return false
+                    if (!outcome.permanent && tried < MAX_ATTEMPTS) return false
                     // Abandoned, loudly. Keeping it would stop everything behind it
                     // for as long as the app is installed.
                     Log.w(
@@ -551,8 +554,19 @@ object Outbox {
     private fun outcomeOf(result: ApiResult<*>): Outcome = when (result) {
         is ApiResult.Success -> Outcome.Done
         is ApiResult.Failure ->
-            if (result.offline) Outcome.Wait else Outcome.Refused(result.message)
+            if (result.offline) Outcome.Wait
+            else Outcome.Refused(result.message, permanent = isRequestPending(result))
     }
+
+    /**
+     * The server saying this person's message request has not been accepted yet.
+     *
+     * The same answer however often it is asked, until somebody else acts - so it is
+     * given up on at once instead of being tried three times, and it does not hold
+     * the queue behind it while it waits.
+     */
+    private fun isRequestPending(result: ApiResult.Failure): Boolean =
+        result.payload?.optString("code") == REQUEST_PENDING
 
     private fun work(
         kind: String,
@@ -578,7 +592,11 @@ object Outbox {
         /** Not told, and not refused either: the network was not there. */
         data object Wait : Outcome
 
-        /** The server answered, and the answer was no. */
-        data class Refused(val why: String) : Outcome
+        /**
+         * The server answered, and the answer was no.
+         *
+         * [permanent] when asking again cannot change it, so there are no more tries.
+         */
+        data class Refused(val why: String, val permanent: Boolean = false) : Outcome
     }
 }

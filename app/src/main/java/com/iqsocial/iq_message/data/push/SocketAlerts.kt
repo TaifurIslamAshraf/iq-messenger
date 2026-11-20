@@ -69,6 +69,11 @@ object SocketAlerts {
                 if (event is ChatSocket.Event.ScreenshotSeen) {
                     runCatching { ScreenshotAlerts.live(app, event.payload) }
                 }
+                // A request answered on another device, or one that has just arrived:
+                // the list's rows say which, so they are read again.
+                if (event is ChatSocket.Event.AccessChanged) {
+                    ChatRepository.invalidate()
+                }
             }
         }
     }
