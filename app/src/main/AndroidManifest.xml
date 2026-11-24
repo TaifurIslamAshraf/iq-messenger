@@ -241,6 +241,66 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_accent" />
+
+        <!-- Sentry: crashes, ANRs and performance.
+
+             Started by Sentry's own content provider from these values, so there is
+             no Application class to keep. The DSN comes from local.properties or the
+             SENTRY_DSN environment variable (see app/build.gradle.kts); empty, the
+             SDK starts and sends nothing.
+
+             This is a private messenger, and that decides most of what follows. A
+             crash report should say where the code went wrong, not what anybody was
+             reading when it did:
+
+             - no screenshot with an error. The screen at the moment of a crash is a
+               conversation, and some of them are ones the other person has asked
+               not to be captured at all - this app blocks screenshots for exactly
+               that. Sending one to a third party would be the same act;
+             - no session replay, for the same reason over a longer time;
+             - no view hierarchy, which can carry the text that was on screen;
+             - no user details: IP address, user id and the like stay out;
+             - no Sentry logs. Breadcrumbs still carry warnings and errors from
+               logcat, which is where the useful context of a crash usually is.
+
+             Kept: native crash tombstones, because LiveKit and WebRTC run native
+             code and their crashes are otherwise a bare signal number; and
+             tap/scroll breadcrumbs, which name a control rather than its contents. -->
+        <meta-data
+            android:name="io.sentry.dsn"
+            android:value="${sentryDsn}" />
+        <meta-data
+            android:name="io.sentry.environment"
+            android:value="${sentryEnvironment}" />
+        <meta-data
+            android:name="io.sentry.data-collection.user-info"
+            android:value="false" />
+        <meta-data
+            android:name="io.sentry.attach-screenshot"
+            android:value="false" />
+        <meta-data
+            android:name="io.sentry.attach-view-hierarchy"
+            android:value="false" />
+        <meta-data
+            android:name="io.sentry.session-replay.session-sample-rate"
+            android:value="0" />
+        <meta-data
+            android:name="io.sentry.session-replay.on-error-sample-rate"
+            android:value="0" />
+        <meta-data
+            android:name="io.sentry.logs.enabled"
+            android:value="false" />
+        <meta-data
+            android:name="io.sentry.tombstone.enable"
+            android:value="true" />
+        <meta-data
+            android:name="io.sentry.traces.user-interaction.enable"
+            android:value="true" />
+        <!-- One in five sessions traced. All of them is what the docs show for
+             trying it out, and what fills a plan's quota once real people use it. -->
+        <meta-data
+            android:name="io.sentry.traces.sample-rate"
+            android:value="0.2" />
     </application>
 
 </manifest>

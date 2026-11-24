@@ -36,6 +36,7 @@ import androidx.compose.ui.layout.ContentScale
 import com.iqsocial.iq_message.data.media.RemoteImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -186,14 +187,24 @@ fun CircleIconButton(
     background: Color = Color.Transparent,
     tint: Color = Ink,
     borderColor: Color? = null,
-    borderWidth: Dp = 1.dp
+    borderWidth: Dp = 1.dp,
+    /**
+     * False draws it faded and stops it answering.
+     *
+     * Faded rather than hidden: a button that disappears takes its own explanation
+     * with it, and the person is left wondering whether the app has a call button
+     * at all. One that is still there, still in its place and plainly out of
+     * action, says that calling exists and is not available here.
+     */
+    enabled: Boolean = true
 ) {
     val touch = maxOf(size, 48.dp)
     Box(
         modifier = modifier
             .size(touch)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.38f),
         contentAlignment = Alignment.Center
     ) {
         Box(

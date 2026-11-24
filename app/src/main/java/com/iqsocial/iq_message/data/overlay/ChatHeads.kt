@@ -84,8 +84,23 @@ object ChatHeads {
     private var params: WindowManager.LayoutParams? = null
 
     /** Whether the reader has allowed drawing over other apps. */
+    /**
+     * The whole feature, off.
+     *
+     * Heads are drawn *instead of* a notification wherever they are allowed - that
+     * is what [allowed] decides for both the push path and the socket one - so
+     * turning them off here is also what turns the notification back on for every
+     * message. One switch, and no message can fall between the two.
+     *
+     * Off rather than deleted: the windows, the dragging, the docking and the
+     * panel are all still here and all still work. This is the line to change if
+     * they are wanted back.
+     */
+    const val ENABLED = false
+
     fun allowed(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+        ENABLED && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            Settings.canDrawOverlays(context))
 
     /**
      * Everything that touches the window, on the thread that is allowed to.

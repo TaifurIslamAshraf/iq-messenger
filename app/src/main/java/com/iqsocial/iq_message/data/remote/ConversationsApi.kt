@@ -76,6 +76,27 @@ object ConversationsApi {
         ).mapTo(ChatConversation::from)
 
     /** Unread totals for the app badge; muted and archived conversations don't count. */
+    /**
+     * Lets the other person in this chat call you, or stops them.
+     *
+     * Off by default for everybody new, which is the point of it: a stranger who
+     * can write to you cannot also make your phone ring until you say so. The
+     * answer comes back as the whole conversation, with [ConversationAccess.peerCanCall]
+     * set - and both phones are told over the socket, so their call button changes
+     * at the same moment this switch does.
+     *
+     * This is not the same as the account-wide `who_can_call` setting, and does not
+     * replace it: that one still applies on top, so somebody allowed here can still
+     * be refused there.
+     */
+    suspend fun allowCalls(token: String, id: String, allow: Boolean): ApiResult<ChatConversation> =
+        ApiClient.put(
+            "/v1/conversations/${Uri.encode(id)}/calls",
+            JSONObject().put("allow", allow),
+            token,
+            MessengerConfig.BASE_URL
+        ).mapTo(ChatConversation::from)
+
     suspend fun unreadCount(token: String): ApiResult<UnreadCount> =
         ApiClient.get("/v1/conversations/unread-count", token, MessengerConfig.BASE_URL)
             .mapTo { UnreadCount(it.optInt("conversations"), it.optInt("messages")) }

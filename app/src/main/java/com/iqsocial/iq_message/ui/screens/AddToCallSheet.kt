@@ -44,6 +44,7 @@ import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatPerson
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.ListSkeleton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.SheetHandle
 import com.iqsocial.iq_message.ui.icons.IqIcons
@@ -158,18 +159,9 @@ fun AddToCallSheet(
             HairlineDivider()
 
             when {
-                loading -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(d.gutter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(d.icon),
-                        color = Crimson,
-                        strokeWidth = d.scaled(2)
-                    )
-                }
+                // A sheet is short, so the skeleton is short: enough rows to
+                // fill what can be seen and no more.
+                loading -> ListSkeleton(rows = 4, lines = 1)
 
                 people.isEmpty() -> Box(
                     Modifier

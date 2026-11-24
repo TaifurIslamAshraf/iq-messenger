@@ -44,6 +44,25 @@ object Tones {
      */
     fun connecting(context: Context): Uri = raw(context, R.raw.iq_connecting)
 
-    private fun raw(context: Context, id: Int): Uri =
-        Uri.parse("android.resource://${context.packageName}/$id")
+    /**
+     * `android.resource://<package>/raw/<name>`, by name and not by number.
+     *
+     * The numeric form is the one everybody writes, and it is a trap for anything
+     * stored: a notification channel keeps the URI it was created with for the life
+     * of the install, while resource ids are assigned at build time and move
+     * whenever resources are added or removed. A channel left holding last build's
+     * number is a channel that plays nothing at all, silently.
+     *
+     * The name is written into the apk and does not move, so the id is looked up
+     * here only to ask what it is called - which keeps the compiler checking that
+     * the file exists.
+     */
+    private fun raw(context: Context, id: Int): Uri {
+        val res = context.resources
+        return Uri.parse(
+            "android.resource://" + context.packageName +
+                "/" + res.getResourceTypeName(id) +
+                "/" + res.getResourceEntryName(id)
+        )
+    }
 }

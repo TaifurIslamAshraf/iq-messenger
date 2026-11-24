@@ -1,9 +1,22 @@
 package com.iqsocial.iq_message.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,13 +26,15 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -28,6 +43,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import com.iqsocial.iq_message.data.call.CameraLook
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,16 +51,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.profile.SettingsRepository
@@ -67,6 +89,8 @@ import com.iqsocial.iq_message.ui.components.watchForScreenshotGesture
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 @Composable
 fun VideoCallScreen(
     onMinimize: () -> Unit,
@@ -122,7 +146,7 @@ fun VideoCallScreen(
     // idea anyone is there and dims the screen mid-conversation.
     KeepScreenOn()
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(CallBlack)
@@ -130,10 +154,33 @@ fun VideoCallScreen(
             // [watchForScreenshotGesture].
             .watchForScreenshotGesture(active = !peerAllows)
     ) {
+        /*
+         * Everything except the picture can be put away.
+         *
+         * A video call is watched, and what is being watched is the person on the
+         * other end - not the row of buttons over them. A tap anywhere on the
+         * picture slides the header and the bar off their own edges; a tap brings
+         * them back. Nothing is lost by hiding them, which is what makes it safe to
+         * do on a tap rather than behind a control of its own.
+         *
+         * The self-view stays either way. It is not a control, it is the other half
+         * of what there is to look at, and an app that hid your own face when you
+         * asked for a clear view would have hidden the wrong thing.
+         */
+        var chrome by remember { mutableStateOf(true) }
+
         // Their camera, full screen. Until a frame arrives - they have not joined,
         // or have their camera off - the seeded gradient stands in, which is the same
         // thing their avatar is drawn on and so reads as them rather than as a fault.
-        Box(Modifier.fillMaxSize().background(avatarBrush(person.seed))) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(avatarBrush(person.seed))
+                // The tap that puts the controls away. It sits on the picture
+                // rather than on the whole screen, so a tap meant for a button is
+                // taken by the button and never reaches here.
+                .pointerInput(Unit) { detectTapGestures { chrome = !chrome } }
+        ) {
             val feeds = CallEngine.remoteFeeds
             if (feeds.size > 1) {
                 // More than one other person, so there is no "their camera" to fill
@@ -166,18 +213,43 @@ fun VideoCallScreen(
             )
         }
 
-        Column(
-            Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.systemBars)
+        // Your own camera, which is now nobody's child: it is placed over the
+        // call rather than inside the header, so it can be put down anywhere and
+        // can stay while everything else is away.
+        // Read out here: inside the lambdas below, the layout scopes are nearer
+        // receivers and these are no longer reachable without naming one.
+        val roomFor = selfWidthIn(maxWidth)
+        SelfView(
+            me = me,
+            chrome = chrome,
+            onTap = { chrome = !chrome },
+            wide = maxWidth,
+            tall = maxHeight
+        )
+
+        AnimatedVisibility(
+            visible = chrome,
+            // Off its own edge rather than fading on the spot: a header that
+            // slides up says where it went, and so says how to get it back.
+            enter = slideInVertically { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                // Self-view is a share of the width so it never squeezes the name.
-                val selfWidth = (maxWidth * 0.27f).coerceIn(88.dp, 150.dp)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+            ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(start = d.gutterTight, end = d.gutterTight, top = d.gapMd)
+                        .padding(
+                            start = d.gutterTight,
+                            // Kept clear of where the self-view starts, so a long
+                            // name never runs underneath it.
+                            end = d.gutterTight + roomFor + d.gapSm,
+                            top = d.gapMd
+                        )
                 ) {
                     Box(
                         Modifier
@@ -270,67 +342,43 @@ fun VideoCallScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.width(d.gapSm))
-                    Box(
-                        Modifier
-                            .width(selfWidth)
-                            .aspectRatio(0.67f)
-                            .clip(RoundedCornerShape(d.radiusLg))
-                            .background(avatarBrush(me.seed))
-                    ) {
-                        // Mirrored, because this is the one picture that behaves like
-                        // a mirror: you move left and the reflection moves left.
-                        CallVideo(
-                            track = CallEngine.localVideo,
-                            modifier = Modifier.fillMaxSize(),
-                            mirror = true
-                        )
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = d.gapMd)
-                                .size(d.scaled(38))
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.45f))
-                                .clickable { CallEngine.flipCamera() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                IqIcons.FlipCamera, "Switch camera",
-                                Modifier.size(d.iconSm), tint = Color.White
-                            )
-                        }
-                    }
+                }
+
+                if (looks) {
+                    CameraLookPanel(
+                        onDone = { looks = false },
+                        modifier = Modifier
+                            .padding(horizontal = d.gutterTight)
+                            .padding(top = d.gapMd)
+                            .fillMaxWidth()
+                            .widthIn(max = d.contentMaxWidth)
+                    )
                 }
             }
+        }
 
-            if (looks) {
-                CameraLookPanel(
-                    onDone = { looks = false },
-                    modifier = Modifier
-                        .padding(horizontal = d.gutterTight)
-                        .padding(top = d.gapMd)
-                        .fillMaxWidth()
-                        .widthIn(max = d.contentMaxWidth)
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            /*
+        /*
              * The end-call button is taller than the bar and shares a centreline
              * with the small buttons, so the pill has to bulge up around it.
              * `bulge` is the strip above the flat edge that the hump lives in.
              */
-            val ctrl = d.callControl
-            val endBtn = d.callEnd
-            val padTop = d.scaled(10)
-            val bulge = d.scaled(11)
-            val pillShape = HumpedBarShape(
-                humpWidth = d.scaled(92),
-                humpHeight = bulge
-            )
+        val ctrl = d.callControl
+        val endBtn = d.callEnd
+        val padTop = d.scaled(10)
+        val bulge = d.scaled(11)
+        val pillShape = HumpedBarShape(
+            humpWidth = d.scaled(92),
+            humpHeight = bulge
+        )
 
+        AnimatedVisibility(
+            visible = chrome,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+        ) {
             Row(
                 Modifier
                     .padding(start = d.gapMd, end = d.gapMd, bottom = d.gapXl)
@@ -406,6 +454,132 @@ fun VideoCallScreen(
         }
     }
 }
+
+/** A share of the width, with a floor and a ceiling, so it suits any screen. */
+private fun selfWidthIn(space: Dp): Dp = (space * 0.27f).coerceIn(88.dp, 150.dp)
+
+/**
+ * Your own camera, placed wherever it is put down.
+ *
+ * It used to sit in the header, which decided two things for the person holding
+ * the phone: that it belonged in the top right, and that it went away whenever the
+ * header did. Both are wrong on a call. It covers part of the picture by its
+ * nature, so which part has to be theirs to choose, and the face you are checking
+ * is the last thing to hide when the controls go.
+ *
+ * Dragged by a finger, and kept inside the screen while it moves rather than
+ * caught at the end: a corner that is allowed off the edge and then pulled back
+ * reads as a mistake being corrected. The settle is there for the other case -
+ * the screen itself changing size, on rotation or in a split window - where the
+ * place it was put down may no longer be on the screen at all.
+ *
+ * It grows very slightly while held. A drag with no answer from the thing being
+ * dragged feels like dragging the screen.
+ */
+@Composable
+private fun BoxScope.SelfView(
+    me: Person,
+    chrome: Boolean,
+    onTap: () -> Unit,
+    wide: Dp,
+    tall: Dp
+) {
+    val d = IqTheme.dimens
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val bars = WindowInsets.systemBars
+
+    val sizeDp = selfWidthIn(wide)
+    val across = with(density) { wide.toPx() }
+    val down = with(density) { tall.toPx() }
+    val mine = with(density) { sizeDp.toPx() }
+    val high = mine / RATIO
+    val edge = with(density) { d.gutterTight.toPx() }
+    // Clear of the notch at the top and of the gesture bar at the bottom: a
+    // self-view under either is one that cannot be picked up again.
+    val sky = bars.getTop(density) + with(density) { d.gapMd.toPx() }
+    val floor = bars.getBottom(density) + edge
+
+    fun inside(at: Offset) = Offset(
+        at.x.coerceIn(edge, (across - mine - edge).coerceAtLeast(edge)),
+        at.y.coerceIn(sky, (down - high - floor).coerceAtLeast(sky))
+    )
+
+    // Where it starts: the top right, which is where it always was.
+    val spot = remember { Animatable(Offset(across - mine - edge, sky), Offset.VectorConverter) }
+    var held by remember { mutableStateOf(false) }
+    val grab by animateFloatAsState(if (held) 1.06f else 1f, label = "selfGrab")
+
+    LaunchedEffect(across, down) {
+        spot.animateTo(inside(spot.value), spring(stiffness = Spring.StiffnessMediumLow))
+    }
+
+    Box(
+        Modifier
+            .align(Alignment.TopStart)
+            .offset { IntOffset(spot.value.x.roundToInt(), spot.value.y.roundToInt()) }
+            .graphicsLayer { scaleX = grab; scaleY = grab }
+            .width(sizeDp)
+            .aspectRatio(RATIO)
+            .clip(RoundedCornerShape(d.radiusLg))
+            .background(avatarBrush(me.seed))
+            .pointerInput(across, down) {
+                detectDragGestures(
+                    onDragStart = { held = true },
+                    onDragEnd = {
+                        held = false
+                        scope.launch {
+                            spot.animateTo(
+                                inside(spot.value),
+                                spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)
+                            )
+                        }
+                    },
+                    onDragCancel = { held = false }
+                ) { change, drag ->
+                    // Taken here, so the tap that hides the controls does not also
+                    // fire at the end of every drag.
+                    change.consume()
+                    scope.launch { spot.snapTo(inside(spot.value + drag)) }
+                }
+            }
+            .pointerInput(Unit) { detectTapGestures { onTap() } }
+    ) {
+        // Mirrored, because this is the one picture that behaves like a mirror:
+        // you move left and the reflection moves left.
+        CallVideo(
+            track = CallEngine.localVideo,
+            modifier = Modifier.fillMaxSize(),
+            mirror = true
+        )
+        // The flip button is a control, so it goes with the other controls.
+        AnimatedVisibility(
+            visible = chrome,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = d.gapMd)
+        ) {
+            Box(
+                Modifier
+                    .size(d.scaled(38))
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { CallEngine.flipCamera() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    IqIcons.FlipCamera, "Switch camera",
+                    Modifier.size(d.iconSm), tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+/** Width over height, the shape a phone camera gives held upright. */
+private const val RATIO = 0.67f
 
 /**
  * Brightness and smoothing, over the call.

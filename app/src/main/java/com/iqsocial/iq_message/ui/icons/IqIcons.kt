@@ -846,6 +846,23 @@ object IqIcons {
         }
     }
 
+    /**
+     * The eye, solid: the almond filled, a ring cut out of it for the iris, and the
+     * pupil filled again inside the ring.
+     *
+     * Even-odd is what makes that one path rather than three: each closed shape
+     * inside another flips between filled and empty, so the ring needs no colour of
+     * its own and shows whatever is behind the icon - which is what lets it sit on
+     * a video frame without a white disc where the iris should be.
+     */
+    val EyeFilled = icon("EyeFilled") {
+        fill(PathFillType.EvenOdd) {
+            eyeOutline()
+            circle(12f, 12f, 4.4f)
+            circle(12f, 12f, 2.4f)
+        }
+    }
+
     val EyeOff = icon("EyeOff") {
         line {
             eyeOutline()

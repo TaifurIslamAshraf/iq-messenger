@@ -89,6 +89,9 @@ import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.ProtectedGreen
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 
+/** See where it is read: the way into the account-wide privacy screen. */
+private const val PRIVACY_ROW_SHOWN = false
+
 @Composable
 fun ProfileScreen(
     onBack: () -> Unit,
@@ -335,36 +338,51 @@ fun ProfileScreen(
                     onClick = onEditProfile
                 ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
 
-                SettingDivider()
-                SettingRow(
-                    icon = IqIcons.ShieldOutline,
-                    iconTint = Color(0xFFE3F5E9),
-                    title = "Privacy",
-                    // Writable now: `/v1/me/privacy` takes both of these, so the row
-                    // opens them rather than only reporting them.
-                    // One line, sharing the row with the "Protected" chip, so the
-                    // common case of both settings matching is collapsed rather than
-                    // spelled out and then truncated.
-                    onClick = onPrivacy,
-                    subtitle = profile?.let {
-                        if (it.whoCanMessage == it.whoCanCall) {
-                            "Messages & calls: ${readable(it.whoCanMessage)}"
-                        } else {
-                            "Msg: ${readable(it.whoCanMessage)} · " +
-                                "Calls: ${readable(it.whoCanCall)}"
-                        }
-                    } ?: "Security and visibility"
-                ) {
-                    Text(
-                        "Protected",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = ProtectedGreen,
-                        maxLines = 1
-                    )
-                    Spacer(Modifier.width(d.gapSm))
-                    Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                // The account-wide 'who can message / who can call' pair, hidden
+                // rather than removed.
+                //
+                // Calling is now answered per conversation - the 'Allow calls'
+                // switch in a chat's own menu - and that is both narrower and
+                // easier to reason about: it is about one person, it is set where
+                // that person is, and both sides are told the moment it changes. A
+                // second, broader switch somewhere else that also decides the same
+                // thing is how people end up unable to work out why a call will not
+                // go through.
+                //
+                // The screen, the route and  are all still
+                // here and still work. Only the way in is closed, so this is one
+                // line to undo if the account-wide setting is wanted again.
+                if (PRIVACY_ROW_SHOWN) {
+                    SettingDivider()
+                    SettingRow(
+                        icon = IqIcons.ShieldOutline,
+                        iconTint = Color(0xFFE3F5E9),
+                        title = "Privacy",
+                        // Writable now: `/v1/me/privacy` takes both of these, so the row
+                        // opens them rather than only reporting them.
+                        // One line, sharing the row with the "Protected" chip, so the
+                        // common case of both settings matching is collapsed rather than
+                        // spelled out and then truncated.
+                        onClick = onPrivacy,
+                        subtitle = profile?.let {
+                            if (it.whoCanMessage == it.whoCanCall) {
+                                "Messages & calls: ${readable(it.whoCanMessage)}"
+                            } else {
+                                "Msg: ${readable(it.whoCanMessage)} · " +
+                                    "Calls: ${readable(it.whoCanCall)}"
+                            }
+                        } ?: "Security and visibility"
+                    ) {
+                        Text(
+                            "Protected",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ProtectedGreen,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.width(d.gapSm))
+                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                    }
                 }
-
                 SettingDivider()
                 // What a notification is allowed to say, which `/v1/settings` owns.
                 //

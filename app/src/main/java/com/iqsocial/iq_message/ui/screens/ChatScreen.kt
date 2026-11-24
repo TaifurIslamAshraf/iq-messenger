@@ -58,6 +58,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -116,6 +118,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import androidx.compose.ui.window.Dialog
@@ -169,6 +172,8 @@ import com.iqsocial.iq_message.data.remote.MessageInfo
 import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.BubbleShape
+import com.iqsocial.iq_message.ui.components.ThreadSkeleton
+import com.iqsocial.iq_message.ui.components.shimmer
 import com.iqsocial.iq_message.ui.components.SecureScreen
 import com.iqsocial.iq_message.ui.components.peerAllowsScreenshot
 import com.iqsocial.iq_message.ui.components.watchForScreenshotGesture
@@ -283,6 +288,18 @@ fun ChatScreen(
     var threadError by remember(conversationId) { mutableStateOf<String?>(null) }
 
     /**
+     * Whether the first fetch has finished, either way.
+     *
+     * Not the same question as "are there messages". An empty thread and a thread
+     * that has not arrived look identical from here, and the screen was answering
+     * both with "No messages yet" - so a chat opened from a bubble, with a cold
+     * process and nothing in the store, said there was nothing to read and then
+     * filled with messages a second later. One of those two statements was a lie
+     * whichever way it went.
+     */
+    var threadSettled by remember(conversationId) { mutableStateOf(false) }
+
+    /**
      * The peer, with anything the server left out filled in from what is known.
      *
      * A conversation opened from search comes back, now and then, with the peer's
@@ -300,6 +317,7 @@ fun ChatScreen(
      * and Reject at everybody on the way in would be wrong far more often than not.
      */
     val access = remote?.access ?: ConversationAccess.OPEN
+
 
     // The head for the chat being read: created only in the floating panel, where
     // the heads are the panel's own tabs. In the app it only clears the count on a
@@ -548,6 +566,30 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    /**
+     * Whether this person may ring this phone.
+     *
+     * Flipped here before the server is asked, and put back if the server refuses.
+     * A switch that waits for a round trip before moving reads as a switch that did
+     * not take the press - and this one is reached through a menu, where a second
+     * press to "make sure" closes the menu instead.
+     */
+    var callsBusy by remember(conversationId) { mutableStateOf(false) }
+    fun allowCalls(allow: Boolean) {
+        val auth = token ?: return
+        val before = remote ?: return
+        if (callsBusy) return
+        callsBusy = true
+        remote = before.copy(access = before.access.copy(peerCanCall = allow))
+        scope.launch {
+            when (val r = ConversationsApi.allowCalls(auth, conversationId, allow)) {
+                is ApiResult.Success -> remote = r.data
+                is ApiResult.Failure -> remote = before
+            }
+            callsBusy = false
+        }
+    }
+
     /** A page of older messages is on its way. */
     var loadingOlder by remember(conversationId) { mutableStateOf(false) }
 
@@ -642,7 +684,11 @@ fun ChatScreen(
             remote = held
             held.peer?.let { KnownPeople.remember(conversationId, it) }
         }
-        if (token.isNullOrBlank()) return@LaunchedEffect
+        if (token.isNullOrBlank()) {
+            // Signed out: nothing is coming, so the store is the whole answer.
+            threadSettled = true
+            return@LaunchedEffect
+        }
         when (val c = ConversationsApi.get(token, conversationId)) {
             is ApiResult.Success -> {
                 remote = c.data
@@ -664,6 +710,7 @@ fun ChatScreen(
             // costs the newest messages and not the conversation.
             is ApiResult.Failure -> threadError = page.message
         }
+        threadSettled = true
         // Report how far this device has read, so the peer's ticks turn blue. Queued
         // rather than sent: a thread read with no signal has still been read, and the
         // receipt is owed to the other person whenever the phone can pay it.
@@ -1229,7 +1276,11 @@ fun ChatScreen(
                     val open = onOpenProfile
                     if (open != null) open(person.id) else peerOpen = true
                 },
-                onDetails = { peerOpen = true }
+                onDetails = { peerOpen = true },
+                canCall = access.canCall,
+                allowCalls = access.peerCanCall,
+                callsBusy = callsBusy,
+                onAllowCalls = ::allowCalls
             )
 
             // At the top, where it cannot be missed and does not cover the messages.
@@ -1259,7 +1310,10 @@ fun ChatScreen(
                 // was the last visible one at exactly that moment, finds none, and
                 // throws from inside the measure pass - see [listState].
                 if (messages.isEmpty()) {
-                    EmptyThread(person.name, threadError)
+                    // Bubbles while it may still be coming, the line about there
+                    // being none only once it is certain.
+                    if (threadSettled) EmptyThread(person.name, threadError)
+                    else ThreadSkeleton()
                 } else ProvideThreadMedia(conversationId, token) {
                     LazyColumn(
                         state = listState,
@@ -2337,7 +2391,19 @@ private fun ChatTopBar(
     onShared: () -> Unit = {},
     onOpenPeer: () -> Unit = {},
     /** The conversation's own panel: mute, search, shared media. */
-    onDetails: () -> Unit = {}
+    onDetails: () -> Unit = {},
+    /**
+     * Whether a call may be placed to this person at all.
+     *
+     * Theirs to decide, not this phone's: until they turn their own 'Allow calls'
+     * on, the server refuses the call. Showing live buttons for a call that cannot
+     * happen would be this app promising something the other person has declined.
+     */
+    canCall: Boolean = true,
+    /** Whether this person is allowed to call this phone. */
+    allowCalls: Boolean = true,
+    callsBusy: Boolean = false,
+    onAllowCalls: (Boolean) -> Unit = {}
 ) {
     val d = IqTheme.dimens
     var menuOpen by remember { mutableStateOf(false) }
@@ -2399,21 +2465,26 @@ private fun ChatTopBar(
                     }
                 }
             }
+            // The reason travels with the label, so a screen reader says why the
+            // button will not answer rather than only that it is dimmed.
+            val callLabel = if (canCall) "" else " - " + person.name + " has not allowed calls"
             CircleIconButton(
                 icon = IqIcons.Phone,
-                contentDescription = "Voice call",
+                contentDescription = "Voice call" + callLabel,
                 onClick = onAudioCall,
                 size = d.iconButton,
                 background = CrimsonTint,
-                tint = Crimson
+                tint = Crimson,
+                enabled = canCall
             )
             CircleIconButton(
                 icon = IqIcons.Videocam,
-                contentDescription = "Video call",
+                contentDescription = "Video call" + callLabel,
                 onClick = onVideoCall,
                 size = d.iconButton,
                 background = CrimsonTint,
-                tint = Crimson
+                tint = Crimson,
+                enabled = canCall
             )
             Box {
                 CircleIconButton(
@@ -2443,6 +2514,29 @@ private fun ChatTopBar(
                             menuOpen = false
                             onShared()
                         }
+                    )
+                    HairlineDivider()
+                    // The menu stays open for this one. The other three are errands
+                    // that take you somewhere; this is a setting, and the thing
+                    // worth seeing is the switch moving under your finger.
+                    DropdownMenuItem(
+                        text = { Text("Allow calls") },
+                        trailingIcon = {
+                            Switch(
+                                checked = allowCalls,
+                                // Null, so the row's own click is the only way it
+                                // moves: a switch that also handles the press would
+                                // handle it twice when the row is tapped.
+                                onCheckedChange = null,
+                                enabled = !callsBusy,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Crimson,
+                                    checkedBorderColor = Crimson
+                                )
+                            )
+                        },
+                        onClick = { onAllowCalls(!allowCalls) }
                     )
                 }
             }
@@ -2846,11 +2940,11 @@ private fun LoadingOlder() {
             .padding(vertical = d.gapLg),
         contentAlignment = Alignment.Center
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(d.gapLg),
-            strokeWidth = 2.dp,
-            color = InkFaint
-        )
+        // A pill the size the spinner was, not a skeleton of the messages coming.
+        // Message-shaped placeholders here would push what is being read down the
+        // screen while it is being read, which is what this comment above warns
+        // about and what makes this one place where small beats informative.
+        Box(Modifier.size(d.scaled(72), d.scaled(10)).shimmer())
     }
 }
 
@@ -3399,10 +3493,17 @@ private fun VoiceUploadMark(progress: Float, failed: Boolean, color: Color) {
 @Composable
 private fun VoiceFetchMark(color: Color) {
     val d = IqTheme.dimens
-    CircularProgressIndicator(
-        modifier = Modifier.size(d.scaled(20)),
-        color = color,
-        strokeWidth = d.scaled(2)
+    // Takes its colours from the bubble it sits in: this is drawn on crimson for
+    // your own notes and on white for theirs, and one fixed grey cannot be right
+    // on both.
+    Box(
+        Modifier
+            .size(d.scaled(20))
+            .shimmer(
+                shape = CircleShape,
+                base = color.copy(alpha = 0.25f),
+                glow = color.copy(alpha = 0.6f)
+            )
     )
 }
 
@@ -3678,7 +3779,22 @@ private fun VoiceBubble(message: Message) {
             .background(bg)
             .padding(horizontal = d.gapMd, vertical = d.gapSm)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // The bubble takes the whole width a bubble is allowed, and the wave takes
+        // whatever the button and the duration leave of it.
+        //
+        // The wave was 132dp, fixed, which made a voice note the narrowest thing in
+        // the thread and its bars too close together to aim at. Simply making that
+        // number bigger trades one screen for another: what fits a tall phone
+        // overflows a small one, because the bubble is already capped at 84% of the
+        // column and a fixed row has no way to know that.
+        //
+        // Every voice note comes out the same width, which is what the other
+        // messengers do and is right for a reason beyond looks: the bar you drag to
+        // scrub sits in the same place in every note, so the hand learns it once.
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             val sending = message.uploadProgress >= 0f
             Box(
                 Modifier
@@ -3719,13 +3835,27 @@ private fun VoiceBubble(message: Message) {
             VoiceWave(
                 bars = message.waveform,
                 active = playing,
+                // Where the sound has got to, and only for the note that is
+                // actually sounding: every bubble reads the same player, and
+                // without this check they would all fill together.
+                played = if (playing) VoicePlayer.progress else 0f,
                 color = if (message.fromMe) Color.White else Ink,
                 modifier = Modifier
-                    .width(d.scaled(132))
-                    .height(d.scaled(28))
+                    .weight(1f)
+                    // A little taller than it was, so the peaks are something
+                    // to look at rather than a texture.
+                    .height(d.scaled(34))
             )
             Spacer(Modifier.width(d.gapMd))
-            Text(message.voiceLength, style = MaterialTheme.typography.bodyMedium, color = fg)
+            Text(
+                message.voiceLength,
+                // One point up from body text: the length is the one fact the
+                // bubble states in words, and it sat a size smaller than a glance.
+                style = MaterialTheme.typography.bodyMedium.let {
+                    it.copy(fontSize = (it.fontSize.value + 1f).sp)
+                },
+                color = fg
+            )
         }
     }
 }
@@ -3740,6 +3870,8 @@ private fun VoiceBubble(message: Message) {
 private fun VoiceWave(
     bars: List<Int>,
     active: Boolean,
+    /** 0 to 1: how much of this note has been heard. */
+    played: Float,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -3749,23 +3881,26 @@ private fun VoiceWave(
     // one; older messages, and anything recorded where the device reported no
     // amplitude, land here.
     val missing = bars.isEmpty() || bars.all { it <= 0 }
-    val shown = remember(bars) { if (missing) emptyList() else peaksOf(bars, WAVE_BARS) }
     val barWidth = d.scaled(3)
     val gap = d.scaled(2)
-    val tint = color.copy(
-        alpha = when {
-            missing -> 0.3f
-            active -> 1f
-            else -> 0.55f
-        }
-    )
+    // Two strengths, not one.
+    //
+    // The wave was drawn in a single colour and only the whole of it changed while
+    // playing, so a note halfway through looked exactly like a note that had not
+    // started: the one thing a waveform is for - seeing where you are in it - was
+    // the one thing it did not show. Now the part that has been heard is drawn at
+    // full strength and the part still to come is faded, and the join between them
+    // is the playing head.
+    val heard = color
+    val toCome = color.copy(alpha = if (active) 0.4f else 0.55f)
+    val tint = color.copy(alpha = if (missing) 0.3f else if (active) 1f else 0.55f)
 
     Canvas(modifier) {
         val w = barWidth.toPx()
         val slot = w + gap.toPx()
         val midY = size.height / 2f
 
-        if (shown.isEmpty()) {
+        if (missing) {
             // One quiet rule across the middle: there is no shape to draw.
             drawLine(
                 color = tint,
@@ -3777,18 +3912,32 @@ private fun VoiceWave(
             return@Canvas
         }
 
-        // Never draw past the width given, however many bars arrived.
-        val fits = ((size.width + gap.toPx()) / slot).toInt().coerceAtLeast(1)
-        val count = minOf(shown.size, fits)
+        // As many bars as the width holds, and the recording fitted to them.
+        //
+        // It used to be a fixed twenty-six, sized for a wave 132dp wide. The wave
+        // now takes whatever the bubble leaves it, which on most phones is more,
+        // and twenty-six bars stopped two thirds of the way across with the rest
+        // of the row empty - a note that looked shorter than it was. Counting the
+        // bars from the width fills it on every screen, and the recording is
+        // stretched or pooled to that count rather than the other way round.
+        val count = ((size.width + gap.toPx()) / slot).toInt().coerceAtLeast(1)
+        val shown = fitTo(bars, count)
+        // Spread so the last bar ends at the right edge exactly: whatever is left
+        // over after whole bars goes into the gaps, not into a stub of empty space.
+        val step = if (count > 1) (size.width - w) / (count - 1) else 0f
+        // Whole bars rather than a bar cut in half: at 3dp wide a part-filled bar
+        // is not something an eye can read, and the step from one bar to the next
+        // is already finer than the ear notices.
+        val front = (count * played.coerceIn(0f, 1f)).toInt()
         for (i in 0 until count) {
             // A floor so a pause is still a bar rather than a dot: a round cap on a
             // line shorter than it is wide draws a circle, which is what made the
             // quiet stretches read as dots.
             val level = shown[i].coerceIn(MIN_BAR, 100)
             val half = (size.height * level / 100f / 2f).coerceAtLeast(w / 2f)
-            val x = w / 2f + i * slot
+            val x = w / 2f + i * step
             drawLine(
-                color = tint,
+                color = if (i < front) heard else toCome,
                 start = Offset(x, midY - half),
                 end = Offset(x, midY + half),
                 strokeWidth = w,
@@ -3797,12 +3946,6 @@ private fun VoiceWave(
         }
     }
 }
-
-/**
- * How many bars fit the bubble: 26 at 3dp with 2dp between them is 128dp of the
- * 132dp the wave is given.
- */
-private const val WAVE_BARS = 26
 
 /**
  * The shortest a bar is drawn, as a percentage.
@@ -3821,6 +3964,29 @@ private const val MIN_BAR = 12
  * still arrives with forty-eight, so this runs on the way in rather than being left
  * to the recorder.
  */
+/**
+ * A recording fitted to exactly [count] bars, whichever way it has to go.
+ *
+ * More samples than bars: pooled, keeping the loudest of each group - see
+ * [peaksOf]. Fewer: stretched, each bar read from between the two samples either
+ * side of it, so a short recording on a wide bubble keeps its shape as a smooth
+ * line of bars instead of a few tall blocks with flat ground between them.
+ */
+private fun fitTo(bars: List<Int>, count: Int): List<Int> {
+    if (count <= 0) return emptyList()
+    if (bars.isEmpty()) return List(count) { 0 }
+    if (bars.size >= count) return peaksOf(bars, count)
+    if (bars.size == 1) return List(count) { bars[0] }
+    val last = bars.lastIndex
+    return List(count) { i ->
+        val at = i.toFloat() * last / (count - 1)
+        val lo = at.toInt().coerceAtMost(last)
+        val hi = (lo + 1).coerceAtMost(last)
+        val t = at - lo
+        (bars[lo] + (bars[hi] - bars[lo]) * t).toInt()
+    }
+}
+
 private fun peaksOf(bars: List<Int>, count: Int): List<Int> {
     if (bars.isEmpty()) return List(count) { 0 }
     if (bars.size <= count) return bars

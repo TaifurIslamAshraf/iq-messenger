@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import com.iqsocial.iq_message.data.AppStart
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.push.MessageNotifications
 import com.iqsocial.iq_message.data.remote.CallType
@@ -45,6 +46,12 @@ class BubbleActivity : ComponentActivity() {
             finish()
             return
         }
+
+        // The socket, the profile and the settings - the things the app sets up on
+        // its way in, which a bubble never walks past. Without this a bubble was a
+        // chat with no live connection: whatever one fetch returned, and nothing
+        // after it. See [AppStart].
+        AppStart.ensure(applicationContext)
 
         // Said before composition, and this is why: ChatScreen clears the chat's
         // notification as soon as it opens, and cancelling a bubbled notification

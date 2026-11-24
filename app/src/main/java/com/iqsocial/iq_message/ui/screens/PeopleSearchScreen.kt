@@ -52,6 +52,8 @@ import com.iqsocial.iq_message.data.remote.ChatPerson
 import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.components.shimmer
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.icons.IqIcons
@@ -286,11 +288,9 @@ private fun PersonRow(person: ChatPerson, busy: Boolean, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(d.gapSm))
         if (busy) {
-            CircularProgressIndicator(
-                Modifier.size(d.icon),
-                color = Crimson,
-                strokeWidth = 2.dp
-            )
+            // Where the chevron was, and the same width, so the row does not
+            // change shape while the chat it points at is being opened.
+            Box(Modifier.size(d.icon, d.scaled(10)).shimmer())
         } else {
             Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkMuted)
         }
@@ -317,7 +317,9 @@ private fun SearchHint(
         verticalArrangement = Arrangement.spacedBy(d.gapSm)
     ) {
         if (searching) {
-            CircularProgressIndicator(Modifier.size(d.iconLg), color = Crimson, strokeWidth = 2.dp)
+            // Results are rows, so what stands in for them is rows. This is the
+            // one placeholder on the screen that is also the answer's shape.
+            ListSkeleton(rows = 5, lines = 1)
             return@Column
         }
 

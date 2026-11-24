@@ -168,6 +168,30 @@ object CallEngine {
         val created = LiveKit.create(appContext = context.applicationContext)
         room = created
 
+        // The call's audio session first, and before anything records or plays.
+        //
+        // This used to be set after joining, which left two things wrong: the
+        // microphone was opened in whatever mode the phone happened to be in, so
+        // the platform's echo canceller was configured for the wrong one, and the
+        // ringback the caller hears played on a stream that was not yet the call's.
+        // Both are decided when the audio session starts, not later.
+        CallAudio.begin(
+            context,
+            when {
+                CallAudio.headsetAttached(context) -> CallAudio.Route.BLUETOOTH
+                video -> CallAudio.Route.SPEAKER
+                else -> CallAudio.Route.EARPIECE
+            }
+        )
+
+        // The microphone, opened now and published when there is a room to publish
+        // to. Opening it costs the time the audio stack takes to come up - the
+        // record session, the echo canceller, the routing - and doing that after
+        // the join meant the first word or two of every call went nowhere. This is
+        // what `prewarm` is for: it starts the recording before anything is
+        // published, so the stack is already running when the call connects.
+        openMic(created)
+
         // The camera is opened here, beside the room rather than after it.
         //
         // It used to wait for `connect` to come back - signalling, ICE, the whole
@@ -246,8 +270,23 @@ object CallEngine {
             connected = true
             // Audio first. A call with no picture is a call; a call with no sound is
             // not, so the microphone is never left behind a camera that may fail.
-            runCatching { created.localParticipant.setMicrophoneEnabled(true) }
-                .onSuccess { micOn = true }
+            val mic = warmMic
+            val micUp = mic != null && runCatching {
+                created.localParticipant.publishAudioTrack(mic)
+            }.getOrDefault(false)
+            if (!micUp && mic != null) {
+                // Let the recording go before the slow path opens its own, for the
+                // same reason as the camera: two of them is one too many.
+                warmMic = null
+                runCatching { mic.stopPrewarm() }
+                runCatching { mic.stop() }
+            }
+            if (micUp) {
+                micOn = true
+            } else {
+                runCatching { created.localParticipant.setMicrophoneEnabled(true) }
+                    .onSuccess { micOn = true }
+            }
             if (video) {
                 val warm = warmCamera
                 val published = warm != null && runCatching {
@@ -268,19 +307,6 @@ object CallEngine {
                 // second later.
                 if (published || enableCamera(created)) cameraOn = true
             }
-            // The earpiece for a voice call, the loudspeaker for a video one: a
-            // video call is held away from the face. A headset overrides both.
-            // A video call is held away from the face, a voice call against it -
-            // and a headset beats both, because wearing one has already answered
-            // the question.
-            CallAudio.begin(
-                context,
-                when {
-                    CallAudio.headsetAttached(context) -> CallAudio.Route.BLUETOOTH
-                    video -> CallAudio.Route.SPEAKER
-                    else -> CallAudio.Route.EARPIECE
-                }
-            )
             refresh(created)
         }
     }
@@ -380,6 +406,16 @@ object CallEngine {
     }
 
     private fun clear() {
+        // A microphone opened for a call that never connected belongs to nobody,
+        // the same as the camera below - and a record session left running is a
+        // phone that thinks it is still being listened to.
+        warmMic?.let { track ->
+            warmMic = null
+            if (room?.localParticipant?.audioTrackPublications.isNullOrEmpty()) {
+                runCatching { track.stopPrewarm() }
+                runCatching { track.stop() }
+            }
+        }
         // A camera opened for a call that never connected belongs to nobody: the
         // room disposes what it published, and this was never published. Left
         // alone it would hold the lens open after the call was gone.
@@ -479,6 +515,35 @@ object CallEngine {
      * unfiltered track, and the call keeps its picture rather than losing it to a
      * filter nobody asked about.
      */
+    /** The microphone that was opened before the room was ready. */
+    private var warmMic: io.livekit.android.room.track.LocalAudioTrack? = null
+
+    /**
+     * Starts recording before there is anywhere to send it.
+     *
+     * `prewarm` is the SDK's own word for this and does exactly what the name says:
+     * it brings up the record session with the platform's echo cancellation and
+     * noise suppression configured, without publishing anything. The track is then
+     * published the moment the room is joined, and the first thing said into the
+     * phone is already being captured rather than waiting for a microphone that has
+     * not opened yet.
+     *
+     * Refused - no microphone permission, another app holding it - is not a
+     * failure: the call connects muted and the ordinary path tries again once there
+     * is a room, by which time the person may have granted it.
+     */
+    private fun openMic(r: Room) {
+        if (warmMic != null) return
+        runCatching {
+            val track = r.localParticipant.createAudioTrack()
+            track.prewarm()
+            track.start()
+            warmMic = track
+        }.onFailure {
+            android.util.Log.w("CallEngine", "Could not open the microphone early", it)
+        }
+    }
+
     /** The camera that was opened before the room was ready, waiting to be published. */
     private var warmCamera: io.livekit.android.room.track.LocalVideoTrack? = null
 

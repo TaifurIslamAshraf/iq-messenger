@@ -49,6 +49,7 @@ import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.data.remote.PublicProfile
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.ProfileSkeleton
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.SecureScreen
@@ -211,10 +212,7 @@ fun PersonScreen(
 
                 profile == null -> {
                     Spacer(Modifier.height(d.gapLg))
-                    CircularProgressIndicator(
-                        color = Crimson,
-                        modifier = Modifier.size(d.icon)
-                    )
+                    ProfileSkeleton()
                 }
             }
 

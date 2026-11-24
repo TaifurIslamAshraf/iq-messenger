@@ -37,6 +37,7 @@ import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatPerson
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.ListSkeleton
 import com.iqsocial.iq_message.ui.components.SheetHandle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -123,12 +124,7 @@ fun SpecialPicker(
             )
 
             if (loading && people.isEmpty()) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(d.gapXxl),
-                    contentAlignment = Alignment.Center
-                ) { CircularProgressIndicator(color = Crimson) }
+                ListSkeleton(rows = 4, lines = 1)
             }
 
             LazyColumn(contentPadding = PaddingValues(vertical = d.gapSm)) {

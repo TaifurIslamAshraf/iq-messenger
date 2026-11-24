@@ -92,9 +92,16 @@ object Ringback {
                 app,
                 if (want == Stage.CONNECTING) Tones.connecting(app) else Tones.ringback(app)
             )
-            // Not full volume: this plays against the ear while waiting, and a tone
-            // at the level of speech is louder than speech.
-            sound.setVolume(VOLUME, VOLUME)
+            // Full volume, and the file carries its own level.
+            //
+            // This was held at 0.6 from when the platform's own tone generator made
+            // this sound: that tone was synthesised at full scale and had to be
+            // pulled down to sit against an ear. These are recordings, and were
+            // measured at a mean of -22 dB - quiet to begin with, and quieter again
+            // for being played at six tenths. Holding back here while the source is
+            // already soft is attenuating twice. The call stream's own volume is
+            // what the person sets, and it is the right place for this to be set.
+            sound.setVolume(1f, 1f)
 
             if (want == Stage.RINGING) {
                 // The ringback is written as a loop - a ring, then the gap after it -
@@ -157,5 +164,4 @@ object Ringback {
     /** Long enough to be a gap between beeps, short enough not to sound dropped. */
     private const val BEEP_GAP_MS = 700L
 
-    private const val VOLUME = 0.6f
 }

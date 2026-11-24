@@ -49,6 +49,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import com.iqsocial.iq_message.ui.components.shimmer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -68,7 +70,6 @@ import com.iqsocial.iq_message.data.remote.QrCode
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.icons.IqIcons
-import androidx.compose.ui.res.painterResource
 import com.iqsocial.iq_message.R
 import com.iqsocial.iq_message.ui.theme.CanvasGrey
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -109,6 +110,7 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
 
     var mine by remember { mutableStateOf<QrCode?>(null) }
     var image by remember { mutableStateOf<ImageBitmap?>(null) }
+
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var typed by remember { mutableStateOf("") }
@@ -207,7 +209,10 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
             ) {
                 val drawn = image
                 if (drawn == null) {
-                    CircularProgressIndicator(color = Crimson, modifier = Modifier.size(d.icon))
+                    // The code is a square and its size is already known, so the
+                    // square itself is the honest placeholder: when the code
+                    // arrives it lands exactly here, at exactly this size.
+                    Box(Modifier.fillMaxSize().shimmer(RoundedCornerShape(d.radiusMd)))
                 } else {
                     Image(
                         bitmap = drawn,
@@ -224,20 +229,27 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
                     // is about 5% of the area, while [draw] now leaves 30% of the
                     // code recoverable, so there is a wide margin between what the
                     // logo hides and what the code can lose.
+                    //
+                    // Drawn from `drawable/iq_logo`, which is the launcher
+                    // artwork itself rather than the mipmap entry: from Android 8
+                    // `@mipmap/ic_launcher` is an adaptive icon - two layers and a
+                    // mask the system owns - and composing those by hand did not
+                    // give back the mark anybody recognises. The flat file is the
+                    // logo as it is seen everywhere else, and it carries its own
+                    // rounded corners and transparency, so the white plate shows
+                    // through them.
                     Box(
                         Modifier
                             .fillMaxSize(LOGO_SHARE)
                             .clip(RoundedCornerShape(28))
                             .background(Color.White)
-                            .padding(3.dp),
+                            .padding(2.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
-                            painter = painterResource(R.mipmap.ic_launcher),
+                            painter = painterResource(R.drawable.iq_logo),
                             contentDescription = null,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(24))
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
@@ -474,6 +486,7 @@ private const val SIZE = 640
 
 /** The logo plate, as a share of the code's width. See where it is drawn. */
 private const val LOGO_SHARE = 0.21f
+
 
 /** The server's own ceiling for a pasted code. */
 private const val MAX_CODE = 32

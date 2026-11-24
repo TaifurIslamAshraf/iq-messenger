@@ -51,6 +51,7 @@ import com.iqsocial.iq_message.data.call.toRecord
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.CallsApi
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.ListSkeleton
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.icons.IqIcons
@@ -223,20 +224,7 @@ fun CallsScreen(
         }
 
         when {
-            loading && calls.isEmpty() -> item {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = d.gapXxl),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(d.icon),
-                        color = Crimson,
-                        strokeWidth = d.scaled(2)
-                    )
-                }
-            }
+            loading && calls.isEmpty() -> item { ListSkeleton(trailing = true) }
 
             failure != null -> item {
                 Column(
@@ -286,18 +274,10 @@ fun CallsScreen(
                 // Reaching this row is the request: it is only composed when the
                 // list has been scrolled to the end of what is loaded.
                 LaunchedEffect(cursor) { loadMore() }
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = d.gapLg),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(d.iconSm),
-                        color = Crimson,
-                        strokeWidth = d.scaled(2)
-                    )
-                }
+                // Two rows rather than a spinner, for the same reason as the first
+                // page: what is coming is more of these, and showing their shape
+                // keeps the scroll position meaning what it meant a moment ago.
+                ListSkeleton(rows = 2, trailing = true)
             }
         }
     }

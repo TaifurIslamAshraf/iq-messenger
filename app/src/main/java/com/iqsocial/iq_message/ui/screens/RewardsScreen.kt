@@ -55,6 +55,8 @@ import com.iqsocial.iq_message.data.remote.SlotStatus
 import com.iqsocial.iq_message.data.remote.SpecialChange
 import com.iqsocial.iq_message.data.remote.SpecialSlot
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.SkeletonLine
+import com.iqsocial.iq_message.ui.components.shimmer
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CanvasGrey
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -259,7 +261,7 @@ fun RewardsScreen(
             }
 
             if (loading && today == null) {
-                item { Centred { CircularProgressIndicator(color = Crimson) } }
+                item { RewardsSkeleton() }
             }
 
             failure?.let { why ->
@@ -318,6 +320,124 @@ fun RewardsScreen(
 }
 
 /* -- the pieces ----------------------------------------------------------- */
+
+/**
+ * This page before it has arrived, in this page's own shape.
+ *
+ * A column of name-and-line rows would have been wrong here, and wrong in the way
+ * a placeholder most hurts: the rewards page is not a list. It opens with two
+ * figures side by side, then a card for the special person, then a heading, and
+ * only then rows - and each of those rows carries a progress bar that the generic
+ * row does not have. Standing in with the wrong shape means everything jumps into
+ * a different place the moment the real page lands, which is the one thing a
+ * placeholder exists to prevent.
+ *
+ * So it is built from the same pieces as the page itself, at the same sizes and
+ * with the same padding: [Figure]'s two tiles, [SpecialCard]'s tinted block,
+ * [SectionLabel]'s heading, and [SlotRow]'s person-and-bar.
+ */
+@Composable
+private fun RewardsSkeleton() {
+    val d = IqTheme.dimens
+    Column(Modifier.fillMaxWidth()) {
+        // The two figures, as wide and as tall as the real tiles.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.gutter, vertical = d.gapMd),
+            horizontalArrangement = Arrangement.spacedBy(d.gapSm)
+        ) {
+            repeat(2) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(CanvasGrey)
+                        .padding(d.gapMd),
+                    verticalArrangement = Arrangement.spacedBy(d.gapSm)
+                ) {
+                    SkeletonLine(0.55f, d.scaled(22))
+                    SkeletonLine(0.8f, d.scaled(11))
+                }
+            }
+        }
+        SkeletonLine(
+            0.4f,
+            d.scaled(11),
+            Modifier.padding(horizontal = d.gutter)
+        )
+
+        // The special person's card, tinted as it will be.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.gutter, vertical = d.gapSm)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .background(CrimsonTint)
+                .padding(d.gapMd),
+            verticalArrangement = Arrangement.spacedBy(d.gapMd)
+        ) {
+            SkeletonLine(0.45f, d.scaled(13))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(d.avatarMd).shimmer(CircleShape))
+                Spacer(Modifier.width(d.gapSm))
+                Column(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(d.gapSm)
+                ) {
+                    SkeletonLine(0.5f, d.scaled(13))
+                    SkeletonLine(0.3f, d.scaled(11))
+                }
+            }
+        }
+
+        // "Today's people", and what it says on the right.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.gutter, vertical = d.gapMd),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SkeletonLine(0.35f, d.scaled(13), Modifier.weight(1f))
+            Spacer(Modifier.width(d.gapMd))
+            Box(Modifier.size(d.scaled(74), d.scaled(11)).shimmer())
+        }
+
+        // The slots: a face, a name, what it is worth, and how far along it is.
+        repeat(4) { index ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.gutter, vertical = d.gapSm),
+                verticalArrangement = Arrangement.spacedBy(d.gapSm)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(d.avatarMd).shimmer(CircleShape))
+                    Spacer(Modifier.width(d.gapSm))
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(d.gapSm)
+                    ) {
+                        SkeletonLine(SLOT_NAMES[index % SLOT_NAMES.size], d.scaled(13))
+                        SkeletonLine(SLOT_SUBS[index % SLOT_SUBS.size], d.scaled(10))
+                    }
+                    Spacer(Modifier.width(d.gapSm))
+                    Box(Modifier.size(d.scaled(26), d.scaled(12)).shimmer())
+                }
+                // The bar, at the height the real one is drawn.
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(d.scaled(6))
+                        .shimmer(CircleShape)
+                )
+            }
+        }
+    }
+}
+
+private val SLOT_NAMES = listOf(0.46f, 0.58f, 0.38f, 0.52f)
+private val SLOT_SUBS = listOf(0.3f, 0.24f, 0.34f, 0.27f)
 
 @Composable
 private fun Summary(state: RewardsToday, liveMs: Long) {

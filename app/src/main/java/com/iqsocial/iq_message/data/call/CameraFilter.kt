@@ -100,9 +100,22 @@ class CameraFilter : VideoProcessor {
             out.onFrame(frame)
             return
         }
-        // The new frame owns the slot; the original is released by the capturer as
-        // usual, which is why this does not touch it.
-        out.onFrame(VideoFrame(filtered, frame.rotation, frame.timestampNs))
+        // Handed on, and then **let go of**.
+        //
+        // A buffer is born holding one reference - this side's - and anything
+        // downstream that wants to keep the frame takes its own. Not releasing
+        // ours left the count permanently above zero, so the release callback
+        // never ran and the slot it was drawn into was never given back. With
+        // three slots that is three filtered frames and then nothing: from the
+        // fourth frame on, [draw] found no free slot, returned null, and every
+        // frame went through untouched. The filter was not broken, it was
+        // starved - and what it looked like from outside was brightness and
+        // smoothing that simply did nothing.
+        //
+        // The frame that came in is not touched: the capturer owns that one.
+        val sent = VideoFrame(filtered, frame.rotation, frame.timestampNs)
+        out.onFrame(sent)
+        sent.release()
     }
 
     private fun draw(buffer: TextureBufferImpl): VideoFrame.Buffer? {
@@ -323,7 +336,10 @@ class CameraFilter : VideoProcessor {
          *
          * **Brightness** lifts towards white rather than adding a flat amount:
          * `c + k(1 - c)` leaves white alone and moves the shadows most, where a
-         * plain `c + k` would wash the highlights out to nothing.
+         * plain `c + k` would wash the highlights out to nothing. At the top of
+         * the slider it closes just under half the distance to white, which is as
+         * far as a face can be lifted before the noise in the shadows comes up
+         * with it.
          */
         val FRAGMENT = """
             varying vec2 vCoords;
@@ -362,7 +378,7 @@ class CameraFilter : VideoProcessor {
                     colour = mix(centre, sum / weight, uSmooth);
                 }
 
-                colour = colour + uBrightness * 0.35 * (1.0 - colour);
+                colour = colour + uBrightness * 0.45 * (1.0 - colour);
                 gl_FragColor = vec4(clamp(colour, 0.0, 1.0), 1.0);
             }
         """.trimIndent()

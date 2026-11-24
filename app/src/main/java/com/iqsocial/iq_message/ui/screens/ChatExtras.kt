@@ -59,6 +59,7 @@ import com.iqsocial.iq_message.data.remote.MessageInfo
 import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.data.remote.Reaction
 import com.iqsocial.iq_message.ui.components.Avatar
+import com.iqsocial.iq_message.ui.components.GridSkeleton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.SheetHandle
 import com.iqsocial.iq_message.ui.icons.IqIcons
@@ -448,18 +449,10 @@ fun SharedItems(
             HairlineDivider()
 
             when {
-                loading -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(d.gutter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(d.icon),
-                        color = Crimson,
-                        strokeWidth = d.scaled(2)
-                    )
-                }
+                // Tiles, because this tab is a grid of pictures whichever
+                // kind is chosen - and a grid that appears under a column of
+                // grey lines would move everything once it arrived.
+                loading -> GridSkeleton()
 
                 failure != null -> Column(
                     Modifier

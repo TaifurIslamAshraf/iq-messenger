@@ -48,6 +48,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -76,6 +78,7 @@ import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
+import com.iqsocial.iq_message.ui.components.ListSkeleton
 import com.iqsocial.iq_message.ui.components.UnreadBadge
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -95,11 +98,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatsScreen(
     onOpenChat: (String) -> Unit,
-    onNewMessage: () -> Unit
+    onNewMessage: () -> Unit,
+    /** A reel in the strip was tapped; the index is its place in [ReelsFeed]. */
+    onOpenReel: (Int) -> Unit = {},
+    /** The search icon: opens the search screen. */
+    onSearch: () -> Unit = {}
 ) {
     SystemBarIcons(darkIcons = true)
     val d = IqTheme.dimens
-    var query by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var refresh by remember { mutableStateOf(false) }
     // The conversation whose action sheet is open, and the mute submenu.
@@ -124,29 +130,9 @@ fun ChatsScreen(
         ChatRepository.refreshUnread(token)
     }
 
-    // Search is the server's: the spec matches a word prefix of the peer's name,
-    // which a filter over the loaded page could not reproduce.
-    var searchHits by remember { mutableStateOf<List<ChatConversation>?>(null) }
-    var messageHits by remember { mutableStateOf<List<MessageHit>>(emptyList()) }
-    LaunchedEffect(query, token) {
-        if (token.isNullOrBlank() || query.isBlank()) {
-            searchHits = null
-            messageHits = emptyList()
-            return@LaunchedEffect
-        }
-        delay(300)                       // let typing settle before asking
-        val q = query.trim()
-        searchHits = when (val r = ConversationsApi.search(token!!, q)) {
-            is ApiResult.Success -> r.data
-            is ApiResult.Failure -> emptyList()
-        }
-        // Searching a messenger means searching what was said, not only who said
-        // it, so message text is searched alongside the names.
-        messageHits = when (val r = MessagesApi.search(token, q)) {
-            is ApiResult.Success -> r.data.items
-            is ApiResult.Failure -> emptyList()
-        }
-    }
+    // Searching has its own screen now - see ChatSearchScreen. This list is only
+    // ever the inbox (or the archive), which is what lets it page, refresh and
+    // keep its scroll position without a query to reconcile with.
     /**
      * Who in this list is online.
      *
@@ -159,7 +145,7 @@ fun ChatsScreen(
      * rather than adds up, because a list that has scrolled a long way would
      * otherwise be watching every person it has ever shown.
      */
-    val rowsForPresence = searchHits ?: ChatRepository.conversations
+    val rowsForPresence = ChatRepository.conversations
     val peerUids = remember(rowsForPresence) {
         rowsForPresence.mapNotNull { it.peer?.uid?.takeIf(String::isNotBlank) }.distinct()
     }
@@ -169,7 +155,7 @@ fun ChatsScreen(
         PresenceRepository.refresh(token, peerUids)
     }
 
-    val rows = searchHits ?: ChatRepository.conversations
+    val rows = ChatRepository.conversations
 
     val listState = rememberLazyListState()
 
@@ -185,11 +171,8 @@ fun ChatsScreen(
      * be able to ask for the one after it, and a boolean that was already true would
      * be dropped as unchanged.
      *
-     * Not while searching. Those rows are the server's answer to a query, and paging
-     * the inbox underneath them would append conversations nobody asked about.
      */
-    LaunchedEffect(token, searchHits == null) {
-        if (searchHits != null) return@LaunchedEffect
+    LaunchedEffect(token) {
         snapshotFlow {
             val info = listState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -245,6 +228,15 @@ fun ChatsScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    // Search beside the camera, where the box used to sit under
+                    // the title: the list starts with conversations instead of a
+                    // field most visits never type into.
+                    CircleIconButton(
+                        icon = IqIcons.Search,
+                        contentDescription = "Search",
+                        onClick = onSearch,
+                        iconSize = d.iconLg
+                    )
                     CircleIconButton(
                         icon = IqIcons.CameraOutline,
                         contentDescription = "Camera",
@@ -283,21 +275,21 @@ fun ChatsScreen(
                 }
             }
 
-            item {
-                SearchField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = "Search conversations",
-                    modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
-                )
+            // Reels at the top of the list, under the title.
+            item(key = "reels") {
+                Spacer(Modifier.height(d.gapMd))
+                ReelsStrip(onOpen = onOpenReel)
             }
 
-            val searching = query.isNotBlank()
-            if (searching && rows.isNotEmpty()) {
-                item { SearchHeading("Chats") }
+            if (rows.isEmpty() && ChatRepository.loaded) {
+                item { EmptyChats(searching = false) }
             }
-            if (rows.isEmpty() && messageHits.isEmpty() && ChatRepository.loaded) {
-                item { EmptyChats(searching = searching) }
+            // Nothing stored and nothing fetched yet: the first run, or a signed-in
+            // phone whose database was cleared. Every other time the list is drawn
+            // from Room before the request is even sent, so there is nothing to
+            // stand in for - which is why this is not simply `loading`.
+            if (rows.isEmpty() && !ChatRepository.loaded) {
+                item { ListSkeleton(trailing = true) }
             }
             items(rows, key = { it.id }) { conversation ->
                 ConversationRow(
@@ -310,17 +302,6 @@ fun ChatsScreen(
                 )
             }
 
-            if (searching && messageHits.isNotEmpty()) {
-                item { SearchHeading("Messages") }
-                items(messageHits, key = { it.message?.id ?: it.hashCode().toString() }) { hit ->
-                    MessageHitRow(hit, query.trim()) {
-                        hit.conversation?.id?.let(onOpenChat)
-                    }
-                    HairlineDivider(
-                        Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
-                    )
-                }
-            }
         }
         }
 
@@ -385,7 +366,13 @@ fun SearchField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * Hung on the text field itself rather than the box around it, so whoever
+     * holds it can put the cursor in the field - the search screen does, the
+     * moment it opens.
+     */
+    focusRequester: FocusRequester? = null
 ) {
     val d = IqTheme.dimens
     Row(
@@ -415,7 +402,9 @@ fun SearchField(
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                 cursorBrush = SolidColor(Crimson),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
             )
         }
     }
@@ -533,7 +522,7 @@ private fun SheetRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-private fun ConversationRow(
+internal fun ConversationRow(
     conversation: ChatConversation,
     onClick: () -> Unit,
     onLongPress: () -> Unit = {}
@@ -670,7 +659,7 @@ private fun UnreadDot() {
 
 /** Section label separating chats from message hits while searching. */
 @Composable
-private fun SearchHeading(text: String) {
+internal fun SearchHeading(text: String) {
     val d = IqTheme.dimens
     Text(
         text,
@@ -688,7 +677,7 @@ private fun SearchHeading(text: String) {
  * from rather than a bare line of text.
  */
 @Composable
-private fun MessageHitRow(hit: MessageHit, query: String, onClick: () -> Unit) {
+internal fun MessageHitRow(hit: MessageHit, query: String, onClick: () -> Unit) {
     val d = IqTheme.dimens
     val peer = hit.conversation?.peer
     val name = peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown"
@@ -754,7 +743,7 @@ private fun MessageHitRow(hit: MessageHit, query: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EmptyChats(searching: Boolean) {
+internal fun EmptyChats(searching: Boolean) {
     val d = IqTheme.dimens
     Column(
         Modifier

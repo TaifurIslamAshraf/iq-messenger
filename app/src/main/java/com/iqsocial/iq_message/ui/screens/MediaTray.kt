@@ -348,6 +348,9 @@ fun MediaTray(
  * choosing: it appears with the first tap and leaves with the last one undone, and
  * the composer underneath is for words.
  */
+/** How much larger the send button is than the size it started at. */
+private const val SEND_SCALE = 1.3f
+
 @Composable
 private fun SendBar(count: Int, onSend: () -> Unit) {
     val d = IqTheme.dimens
@@ -365,22 +368,27 @@ private fun SendBar(count: Int, onSend: () -> Unit) {
             color = InkMuted
         )
         Spacer(Modifier.weight(1f))
+        // A third larger than the rest of the tray's controls. It is the one press
+        // the whole tray exists for, made after choosing - often with the phone
+        // held in one hand - and the old pill was the size of a label.
         Row(
             Modifier
-                .clip(RoundedCornerShape(d.radiusLg))
+                .clip(RoundedCornerShape(d.radiusLg * SEND_SCALE))
                 .background(Crimson)
                 .clickable(onClick = onSend)
-                .padding(horizontal = d.gapLg, vertical = d.gapSm),
+                .padding(horizontal = d.gapLg * SEND_SCALE, vertical = d.gapSm * SEND_SCALE),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "Send",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.let {
+                    it.copy(fontSize = it.fontSize * SEND_SCALE)
+                },
                 color = Color.White,
                 fontWeight = FontWeight.SemiBold
             )
-            Spacer(Modifier.width(d.gapXs))
-            Icon(IqIcons.Send, null, Modifier.size(d.iconSm), tint = Color.White)
+            Spacer(Modifier.width(d.gapXs * SEND_SCALE))
+            Icon(IqIcons.Send, null, Modifier.size(d.iconSm * SEND_SCALE), tint = Color.White)
         }
     }
 }

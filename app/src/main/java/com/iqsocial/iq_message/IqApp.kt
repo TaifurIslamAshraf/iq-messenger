@@ -96,6 +96,9 @@ import com.iqsocial.iq_message.ui.screens.PeopleScreen
 import com.iqsocial.iq_message.ui.screens.PeopleSearchScreen
 import com.iqsocial.iq_message.ui.screens.PersonScreen
 import com.iqsocial.iq_message.ui.screens.QrScreen
+import com.iqsocial.iq_message.ui.screens.ReelsScreen
+import com.iqsocial.iq_message.ui.screens.ChatSearchScreen
+import com.iqsocial.iq_message.data.reels.ReelsFeed
 import com.iqsocial.iq_message.ui.screens.ProfileScreen
 import com.iqsocial.iq_message.ui.screens.RewardsScreen
 import com.iqsocial.iq_message.ui.screens.SignupScreen
@@ -136,6 +139,12 @@ sealed interface Route {
      */
     /** This account's QR code, and reading somebody else's. */
     data object QrCode : Route
+
+    /** Searching conversations and messages, opened from the chat list's icon. */
+    data object ChatSearch : Route
+
+    /** The reels viewer, opened at the reel tapped in the strip. */
+    data class Reels(val start: Int) : Route
 
     data object EditProfile : Route
     data object Privacy : Route
@@ -807,6 +816,8 @@ fun IqApp(
                         onAudioCall = { CallCenter.start(context, it, CallType.AUDIO) },
                         onVideoCall = { CallCenter.start(context, it, CallType.VIDEO) },
                         onNewMessage = { nav.push(Route.PeopleSearch) },
+                        onOpenReel = { nav.push(Route.Reels(it)) },
+                        onSearch = { nav.push(Route.ChatSearch) },
                         onEditProfile = { nav.push(Route.EditProfile) },
                         onQrCode = { nav.push(Route.QrCode) },
                         onCrop = { picked, kind ->
@@ -861,6 +872,7 @@ fun IqApp(
                             UploadQueue.clear(context)
                             KnownPeople.clear()
                             ChatHeads.clear()
+                            ReelsFeed.clear()
                             ChatSocket.disconnect()
                             SocketAlerts.stop()
                             nav.replaceAll(Route.Login)
@@ -925,6 +937,25 @@ fun IqApp(
                     onOpenConversation = { conversationId ->
                         nav.pop()
                         nav.push(Route.Chat(conversationId))
+                    }
+                )
+
+                Route.ChatSearch -> ChatSearchScreen(
+                    onBack = { nav.pop() },
+                    onOpenChat = { conversationId ->
+                        // The search has done its errand. Leaving it underneath
+                        // would make back from the chat land on a box of results
+                        // for something already found.
+                        nav.pop()
+                        nav.push(Route.Chat(conversationId))
+                    }
+                )
+
+                is Route.Reels -> ReelsScreen(
+                    start = route.start,
+                    onBack = { nav.pop() },
+                    onOpenPerson = { uid, name, photo ->
+                        nav.push(Route.PersonProfile(uid, name, photo))
                     }
                 )
 
@@ -1093,6 +1124,8 @@ private fun HomeShell(
     onAudioCall: (String) -> Unit,
     onVideoCall: (String) -> Unit,
     onNewMessage: () -> Unit,
+    onOpenReel: (Int) -> Unit,
+    onSearch: () -> Unit,
     onEditProfile: () -> Unit,
     onQrCode: () -> Unit,
     onCrop: (Uri, ProfileImage) -> Unit,
@@ -1112,7 +1145,9 @@ private fun HomeShell(
             when (tab) {
                 HomeTab.Chats -> ChatsScreen(
                     onOpenChat = onOpenChat,
-                    onNewMessage = onNewMessage
+                    onNewMessage = onNewMessage,
+                    onOpenReel = onOpenReel,
+                    onSearch = onSearch
                 )
 
                 HomeTab.Calls -> CallsScreen(

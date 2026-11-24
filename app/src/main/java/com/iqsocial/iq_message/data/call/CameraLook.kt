@@ -8,10 +8,18 @@ import androidx.compose.runtime.setValue
 /**
  * How the camera should look on a video call: brighter, softer, or neither.
  *
- * Two numbers, both `0f` by default, which is the untouched picture - and that
- * matters for more than taste: at zero the filter passes frames through without
- * touching the GPU at all, so somebody who never opens the panel pays nothing for
- * it in battery or heat.
+ * Two numbers. Brightness starts at `0f` - the camera's own exposure, which is
+ * right until somebody says otherwise, since a picture lifted in a well-lit room
+ * only looks washed out. Smoothing starts at [DEFAULT_SMOOTH], because the thing
+ * it fixes is not a matter of taste: a phone sensor held close to a face in indoor
+ * light is noisy, and every camera app anybody is used to has already smoothed
+ * that away before the picture is seen. Starting at zero did not look neutral, it
+ * looked worse than the apps beside it.
+ *
+ * The cost of that default is a shader pass on every frame of every video call.
+ * The fast path through the filter - no GL work at all - is still there and is
+ * still taken whenever both numbers are at zero, which is now something a person
+ * chooses rather than where they begin.
  *
  * Kept on the phone rather than the account. It is a property of this camera in
  * this room's light, not of the person - and a setting that followed somebody to a
@@ -32,7 +40,7 @@ object CameraLook {
         private set
 
     /** 0 is every pore; 1 is as soft as this is willing to be. */
-    var smooth by mutableFloatStateOf(0f)
+    var smooth by mutableFloatStateOf(DEFAULT_SMOOTH)
         private set
 
     /**
@@ -46,7 +54,7 @@ object CameraLook {
         private set
 
     @Volatile
-    var smoothNow: Float = 0f
+    var smoothNow: Float = DEFAULT_SMOOTH
         private set
 
     /** True when there is nothing to do, which is the fast path through the filter. */
@@ -54,8 +62,11 @@ object CameraLook {
 
     fun load(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        setBrightness(prefs.getFloat(KEY_BRIGHTNESS, 0f), context)
-        setSmooth(prefs.getFloat(KEY_SMOOTH, 0f), context)
+        // Read without a context, so nothing is written back: what is stored stays
+        // what the person actually moved a slider to. A default written into the
+        // file on first launch would be a default that can never be changed again.
+        setBrightness(prefs.getFloat(KEY_BRIGHTNESS, 0f))
+        setSmooth(prefs.getFloat(KEY_SMOOTH, DEFAULT_SMOOTH))
     }
 
     fun setBrightness(value: Float, context: Context? = null) {
@@ -71,6 +82,9 @@ object CameraLook {
         smoothNow = held
         context?.save(KEY_SMOOTH, held)
     }
+
+    /** Where smoothing starts for somebody who has never touched it. */
+    private const val DEFAULT_SMOOTH = 0.7f
 
     private fun Context.save(key: String, value: Float) {
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putFloat(key, value).apply()

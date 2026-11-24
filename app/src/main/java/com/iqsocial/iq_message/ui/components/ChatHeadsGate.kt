@@ -62,6 +62,11 @@ fun ChatHeadsGate() {
     var ask by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        // Nothing to ask for while the feature is off, and asking anyway would be
+        // asking for a permission this build has no use for. [ChatHeads.allowed]
+        // already answers false, so without this the prompt would appear on every
+        // sign-in and nothing would come of granting it.
+        if (!ChatHeads.ENABLED) return@LaunchedEffect
         if (ChatHeads.allowed(context)) return@LaunchedEffect
         if (session.chatHeadsPrompted) return@LaunchedEffect
         ask = true

@@ -2,6 +2,7 @@ package com.iqsocial.iq_message.data.media
 
 import android.media.MediaPlayer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.iqsocial.iq_message.data.remote.MessengerConfig
@@ -10,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -59,7 +62,25 @@ object VoicePlayer {
     var failedId by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * How far through the playing message, from 0 to 1.
+     *
+     * Kept here with [playingId] and for the same reason: the bubble it belongs to
+     * is a row in a list that is recomposed and recycled while the sound carries
+     * on. Zero whenever nothing is playing, so a bubble has nothing to remember
+     * when the message stops.
+     *
+     * Polled rather than reported, because `MediaPlayer` has no callback for it.
+     * Twenty times a second is smooth at this size - the wave is a row of 3dp bars,
+     * and the cursor only has to land on the right one.
+     */
+    var progress by mutableFloatStateOf(0f)
+        private set
+
     private var player: MediaPlayer? = null
+
+    /** The poll, which lives exactly as long as the sound does. */
+    private var ticker: Job? = null
 
     /**
      * The fetch runs here, in the player's own scope, not the caller's.
@@ -132,10 +153,35 @@ object VoicePlayer {
         created.start()
         player = created
         playingId = messageId
+        watch(created)
     }.isSuccess.also { if (!it) release() }
+
+    /**
+     * Follows the playing head until the sound ends or is stopped.
+     *
+     * The duration is read once: it does not change, and asking a `MediaPlayer`
+     * twenty times a second for something fixed is twenty needless calls into
+     * native code. A file that reports no duration - some recordings do - simply
+     * has no progress to show, which is better than dividing by zero.
+     */
+    private fun watch(sound: MediaPlayer) {
+        ticker?.cancel()
+        val total = runCatching { sound.duration }.getOrDefault(0)
+        if (total <= 0) return
+        ticker = scope.launch {
+            while (isActive && player === sound) {
+                val at = runCatching { sound.currentPosition }.getOrDefault(0)
+                progress = (at.toFloat() / total).coerceIn(0f, 1f)
+                delay(50)
+            }
+        }
+    }
 
     /** Tears down the player alone, leaving the queue of work to its owner. */
     private fun release() {
+        ticker?.cancel()
+        ticker = null
+        progress = 0f
         player?.let { p ->
             runCatching { p.stop() }
             runCatching { p.release() }

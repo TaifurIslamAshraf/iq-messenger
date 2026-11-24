@@ -190,9 +190,12 @@ fun AttachmentSheet(
                         .align(Alignment.BottomEnd)
                         .padding(end = d.gutter, bottom = d.gapXl)
                 ) {
+                    // A third larger than a standard action button: the press
+                    // the whole sheet leads up to, and the count badge on its
+                    // corner needs the room.
                     Box(
                         Modifier
-                            .size(d.fab)
+                            .size(d.fab * 1.3f)
                             .clip(CircleShape)
                             .background(Crimson)
                             .clickable { onSend(selected.size) },
@@ -200,7 +203,7 @@ fun AttachmentSheet(
                     ) {
                         Icon(
                             IqIcons.PaperPlane, "Send",
-                            Modifier.size(d.iconLg), tint = Color.White
+                            Modifier.size(d.iconLg * 1.3f), tint = Color.White
                         )
                     }
                     Box(
