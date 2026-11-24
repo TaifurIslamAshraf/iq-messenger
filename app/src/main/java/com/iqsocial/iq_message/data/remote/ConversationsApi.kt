@@ -85,9 +85,8 @@ object ConversationsApi {
      * set - and both phones are told over the socket, so their call button changes
      * at the same moment this switch does.
      *
-     * This is not the same as the account-wide `who_can_call` setting, and does not
-     * replace it: that one still applies on top, so somebody allowed here can still
-     * be refused there.
+     * This is the only thing that decides who may call: there is no account-wide
+     * setting on top of it.
      */
     suspend fun allowCalls(token: String, id: String, allow: Boolean): ApiResult<ChatConversation> =
         ApiClient.put(

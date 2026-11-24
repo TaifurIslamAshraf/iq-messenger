@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,7 +31,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -44,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1016,5 +1021,151 @@ private fun PeerAction(
         Icon(icon, null, Modifier.size(d.icon), tint = InkMuted)
         Spacer(Modifier.width(d.gapMd))
         Text(label, style = MaterialTheme.typography.titleMedium, color = Ink)
+    }
+}
+
+/**
+ * What this one person may do: the chat's three-dot "Permissions".
+ *
+ * Calls are allowed per person, off for anyone new, and nothing account-wide sits
+ * on top. The switch is this phone's answer for them; the line under it is theirs
+ * for this phone, which only they can change.
+ */
+@Composable
+fun PermissionsSheet(
+    person: Person,
+    /** They may call this phone. */
+    allowCalls: Boolean,
+    /** This phone may call them. */
+    theyAllowCalls: Boolean,
+    busy: Boolean,
+    failed: Boolean,
+    onAllowCalls: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val d = IqTheme.dimens
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(d.radiusXl))
+                .background(Color.White)
+                .padding(vertical = d.gapLg)
+        ) {
+            Row(
+                Modifier.padding(horizontal = d.gutter),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Avatar(person = person, size = d.avatarMd)
+                Spacer(Modifier.width(d.gapMd))
+                Column(Modifier.weight(1f)) {
+                    Text("Permissions", style = MaterialTheme.typography.titleLarge, color = Ink)
+                    Text(
+                        person.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(d.gapMd))
+            HairlineDivider()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = allowCalls,
+                        enabled = !busy,
+                        role = Role.Switch,
+                        onValueChange = onAllowCalls
+                    )
+                    .padding(horizontal = d.gutter, vertical = d.gapMd),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PermissionIcon(IqIcons.Phone)
+                Spacer(Modifier.width(d.gapMd))
+                Column(Modifier.weight(1f)) {
+                    Text("Allow calls", style = MaterialTheme.typography.titleMedium, color = Ink)
+                    Text(
+                        if (allowCalls) "${person.name} can call you, voice and video"
+                        else "${person.name} can't call you",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMuted
+                    )
+                }
+                Spacer(Modifier.width(d.gapSm))
+                // Null: the row is the toggle, so a press is handled once.
+                Switch(
+                    checked = allowCalls,
+                    onCheckedChange = null,
+                    enabled = !busy,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Crimson,
+                        checkedBorderColor = Crimson
+                    )
+                )
+            }
+            if (failed) {
+                Text(
+                    "Couldn't save. Check your connection and try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Crimson,
+                    modifier = Modifier.padding(horizontal = d.gutter)
+                )
+            }
+
+            HairlineDivider()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.gutter, vertical = d.gapMd),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PermissionIcon(IqIcons.Videocam)
+                Spacer(Modifier.width(d.gapMd))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Calling ${person.name}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        if (theyAllowCalls) "${person.name} lets you call them"
+                        else "${person.name} hasn't allowed you to call yet. Only they can turn it on.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMuted
+                    )
+                }
+            }
+
+            HairlineDivider()
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.End)
+                    .padding(top = d.gapSm, end = d.gapSm)
+            ) {
+                Text("Done", color = Crimson, style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    val d = IqTheme.dimens
+    Box(
+        Modifier
+            .size(d.iconButton)
+            .clip(CircleShape)
+            .background(CrimsonTint),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, null, Modifier.size(d.icon), tint = Crimson)
     }
 }

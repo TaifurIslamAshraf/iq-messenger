@@ -58,8 +58,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -504,6 +502,7 @@ fun ChatScreen(
     var searchOpen by remember(conversationId) { mutableStateOf(false) }
     var sharedOpen by remember(conversationId) { mutableStateOf(false) }
     var peerOpen by remember(conversationId) { mutableStateOf(false) }
+    var permissionsOpen by remember(conversationId) { mutableStateOf(false) }
     // The picture being looked at full screen, if any.
     var viewing by remember(conversationId) { mutableStateOf<Message?>(null) }
 
@@ -575,16 +574,21 @@ fun ChatScreen(
      * press to "make sure" closes the menu instead.
      */
     var callsBusy by remember(conversationId) { mutableStateOf(false) }
+    var callsFailed by remember(conversationId) { mutableStateOf(false) }
     fun allowCalls(allow: Boolean) {
         val auth = token ?: return
         val before = remote ?: return
         if (callsBusy) return
         callsBusy = true
+        callsFailed = false
         remote = before.copy(access = before.access.copy(peerCanCall = allow))
         scope.launch {
             when (val r = ConversationsApi.allowCalls(auth, conversationId, allow)) {
                 is ApiResult.Success -> remote = r.data
-                is ApiResult.Failure -> remote = before
+                is ApiResult.Failure -> {
+                    remote = before
+                    callsFailed = true
+                }
             }
             callsBusy = false
         }
@@ -1277,10 +1281,8 @@ fun ChatScreen(
                     if (open != null) open(person.id) else peerOpen = true
                 },
                 onDetails = { peerOpen = true },
-                canCall = access.canCall,
-                allowCalls = access.peerCanCall,
-                callsBusy = callsBusy,
-                onAllowCalls = ::allowCalls
+                onPermissions = { permissionsOpen = true },
+                canCall = access.canCall
             )
 
             // At the top, where it cannot be missed and does not cover the messages.
@@ -1707,6 +1709,21 @@ fun ChatScreen(
             onSearch = { searchOpen = true },
             onShared = { sharedOpen = true },
             onDismiss = { peerOpen = false }
+        )
+    }
+
+    if (permissionsOpen) {
+        PermissionsSheet(
+            person = person,
+            allowCalls = access.peerCanCall,
+            theyAllowCalls = access.canCall,
+            busy = callsBusy,
+            failed = callsFailed,
+            onAllowCalls = ::allowCalls,
+            onDismiss = {
+                permissionsOpen = false
+                callsFailed = false
+            }
         )
     }
 
@@ -2392,6 +2409,8 @@ private fun ChatTopBar(
     onOpenPeer: () -> Unit = {},
     /** The conversation's own panel: mute, search, shared media. */
     onDetails: () -> Unit = {},
+    /** What this person may do here: for now, whether they may call. */
+    onPermissions: () -> Unit = {},
     /**
      * Whether a call may be placed to this person at all.
      *
@@ -2399,11 +2418,7 @@ private fun ChatTopBar(
      * on, the server refuses the call. Showing live buttons for a call that cannot
      * happen would be this app promising something the other person has declined.
      */
-    canCall: Boolean = true,
-    /** Whether this person is allowed to call this phone. */
-    allowCalls: Boolean = true,
-    callsBusy: Boolean = false,
-    onAllowCalls: (Boolean) -> Unit = {}
+    canCall: Boolean = true
 ) {
     val d = IqTheme.dimens
     var menuOpen by remember { mutableStateOf(false) }
@@ -2516,27 +2531,14 @@ private fun ChatTopBar(
                         }
                     )
                     HairlineDivider()
-                    // The menu stays open for this one. The other three are errands
-                    // that take you somewhere; this is a setting, and the thing
-                    // worth seeing is the switch moving under your finger.
+                    // Who may call is decided here, per person - there is no
+                    // account-wide setting any more.
                     DropdownMenuItem(
-                        text = { Text("Allow calls") },
-                        trailingIcon = {
-                            Switch(
-                                checked = allowCalls,
-                                // Null, so the row's own click is the only way it
-                                // moves: a switch that also handles the press would
-                                // handle it twice when the row is tapped.
-                                onCheckedChange = null,
-                                enabled = !callsBusy,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = Crimson,
-                                    checkedBorderColor = Crimson
-                                )
-                            )
-                        },
-                        onClick = { onAllowCalls(!allowCalls) }
+                        text = { Text("Permissions") },
+                        onClick = {
+                            menuOpen = false
+                            onPermissions()
+                        }
                     )
                 }
             }

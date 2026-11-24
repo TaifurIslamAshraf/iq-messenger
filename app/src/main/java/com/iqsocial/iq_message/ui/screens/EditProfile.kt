@@ -387,8 +387,8 @@ fun EditProfileScreen(
 }
 
 /**
- * Who may message and who may call, which are the account's settings rather than
- * the messenger's.
+ * Who may message, which is the account's setting rather than the messenger's. Who
+ * may call is not here: it is chosen per person, in each chat's Permissions.
  *
  * Written the moment a choice is pressed rather than behind a save button: there
  * is one value per question and the server answers with what it became, so a
@@ -428,28 +428,11 @@ fun PrivacyScreen(onBack: () -> Unit) {
                 .navigationBarsPadding()
         ) {
             Text(
-                "The same two settings as the IQ Social app - it is one account.",
+                "The same setting as the IQ Social app - it is one account. Who can " +
+                    "call you is chosen per person, in each chat's Permissions.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = InkMuted
             )
-
-            Spacer(Modifier.height(d.gapLg))
-            FieldLabel("Who can call you")
-            Spacer(Modifier.height(d.gapXs))
-            Card {
-                AUDIENCES.forEachIndexed { index, (wire, label) ->
-                    if (index > 0) HairlineDivider()
-                    AudienceRow(
-                        label = label,
-                        chosen = profile?.whoCanCall == wire,
-                        enabled = !MeRepository.saving
-                    ) {
-                        scope.launch {
-                            MeRepository.updatePrivacy(session.token, whoCanCall = wire)
-                        }
-                    }
-                }
-            }
 
             Spacer(Modifier.height(d.gapLg))
             FieldLabel("Who can message you")
@@ -471,8 +454,7 @@ fun PrivacyScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(d.gapSm))
             Text(
-                "Saved on your account. Calls are refused by the server straight " +
-                    "away; messages are not filtered by the messenger yet.",
+                "Saved on your account. Messages are not filtered by the messenger yet.",
                 style = MaterialTheme.typography.bodySmall,
                 color = InkFaint
             )

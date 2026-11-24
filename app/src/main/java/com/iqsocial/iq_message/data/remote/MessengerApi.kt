@@ -65,7 +65,6 @@ data class ProfileFields(
     val country: String,
     val location: String,
     val whoCanMessage: String,
-    val whoCanCall: String,
     /** False while the name was changed less than sixty days ago. */
     val nameCanChange: Boolean,
     /** Epoch ms the name may change from; 0 when it may change now. */
@@ -87,7 +86,6 @@ data class ProfileFields(
                 country = json.string("country"),
                 location = json.string("location"),
                 whoCanMessage = privacy?.string("who_can_message").orEmpty(),
-                whoCanCall = privacy?.string("who_can_call").orEmpty(),
                 nameCanChange = name?.optBoolean("can_change", true) ?: true,
                 nameNextChangeAt = name?.optLong("next_change_at") ?: 0L
             )
@@ -134,7 +132,6 @@ data class MessengerProfile(
     /** Whether this person lets other people screenshot them; see [ChatPerson]. */
     val allowScreenshot: Boolean,
     val whoCanMessage: String,
-    val whoCanCall: String,
     val followers: Int,
     val following: Int,
     /** Posts only — reels are a separate collection and are not counted. */
@@ -159,7 +156,6 @@ data class MessengerProfile(
         country = fields.country,
         location = fields.location,
         whoCanMessage = fields.whoCanMessage,
-        whoCanCall = fields.whoCanCall,
         nameCanChange = fields.nameCanChange,
         nameNextChangeAt = fields.nameNextChangeAt
     )
@@ -192,7 +188,6 @@ data class MessengerProfile(
                 showActiveStatus = json.optBoolean("show_active_status", true),
                 allowScreenshot = json.optBoolean("allow_screenshot", true),
                 whoCanMessage = fields.whoCanMessage,
-                whoCanCall = fields.whoCanCall,
                 followers = json.optInt("followers"),
                 following = json.optInt("following"),
                 totalPost = json.optInt("total_post")
