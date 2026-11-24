@@ -73,4 +73,29 @@ class ConversationAccessTest {
         val again = ChatConversation.from(JSONObject(sent.raw))
         assertEquals(sent.access, again.access)
     }
+
+    @Test
+    fun `reads the messages switch and a call request from either side`() {
+        val asked = conversation(
+            """{"request":null,"can_send":true,"can_call":false,"peer_can_call":false,""" +
+                """"peer_can_send":false,"call_request":{"side":"incoming","status":"pending","at":9}}"""
+        ).access
+        assertFalse(asked.peerCanSend)
+        assertEquals(CallRequest(outgoing = false, pending = true, at = 9), asked.callRequest)
+
+        val notNow = conversation(
+            """{"request":null,"can_send":true,"can_call":false,"peer_can_call":false,""" +
+                """"peer_can_send":true,"call_request":{"side":"outgoing","status":"rejected","at":9}}"""
+        ).access
+        assertEquals(CallRequest(outgoing = true, pending = false, at = 9), notNow.callRequest)
+    }
+
+    @Test
+    fun `an older server without the new fields leaves messages open and no call request`() {
+        val access = conversation(
+            """{"request":null,"can_send":true,"can_call":false,"peer_can_call":false}"""
+        ).access
+        assertTrue(access.peerCanSend)
+        assertNull(access.callRequest)
+    }
 }

@@ -35,7 +35,7 @@ data class Person(
             .joinToString("") { it.first().uppercase() }
 }
 
-enum class MessageKind { TEXT, VOICE, CALL }
+enum class MessageKind { TEXT, VOICE, CALL, CALL_REQUEST }
 
 /**
  * What a call message in the thread has to say for itself.

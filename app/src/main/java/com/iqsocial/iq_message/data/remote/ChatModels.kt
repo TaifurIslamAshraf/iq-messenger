@@ -111,7 +111,11 @@ data class ConversationAccess(
     val request: RequestSide?,
     val canSend: Boolean,
     val canCall: Boolean,
-    val peerCanCall: Boolean
+    val peerCanCall: Boolean,
+    /** This account lets them message freely: the 'Allow messages' switch. */
+    val peerCanSend: Boolean = true,
+    /** The latest request to be allowed to call, either way; null once calls are allowed. */
+    val callRequest: CallRequest? = null
 ) {
     companion object {
         val OPEN = ConversationAccess(
@@ -127,9 +131,32 @@ data class ConversationAccess(
                 request = RequestSide.from(json.string("request")),
                 canSend = json.optBoolean("can_send", true),
                 canCall = json.optBoolean("can_call", true),
-                peerCanCall = json.optBoolean("peer_can_call", true)
+                peerCanCall = json.optBoolean("peer_can_call", true),
+                peerCanSend = json.optBoolean("peer_can_send", true),
+                callRequest = json.optJSONObject("call_request")?.let(CallRequest::from)
             )
         }
+    }
+}
+
+/**
+ * Someone asking to be allowed to call. Unlike a message request, a "Not now" is
+ * shown to the person who asked, and they may ask again.
+ */
+@Immutable
+data class CallRequest(
+    /** True when this account asked. */
+    val outgoing: Boolean,
+    /** False once answered "Not now". */
+    val pending: Boolean,
+    val at: Long
+) {
+    companion object {
+        fun from(json: JSONObject): CallRequest = CallRequest(
+            outgoing = json.string("side") == "outgoing",
+            pending = json.string("status") != "rejected",
+            at = json.optLong("at")
+        )
     }
 }
 

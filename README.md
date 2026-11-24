@@ -485,10 +485,14 @@ Returns `uid`, `fullname`, `phone_number`, `bio`, `profile_picture`, `verified`,
 `show_active_status`, `privacy_settings {who_can_message}`, and the
 three counts `followers`, `following`, `total_post`.
 
-> **Who can call is per person only.** There is no account-wide `who_can_call`:
-> each chat's three-dot menu has **Permissions**, where you allow or stop that one
-> person calling you (`PUT /v1/conversations/:id/calls`) and see whether they allow
-> you. Off for anyone new.
+> **Messages and calls are per person only.** There is no account-wide `who_can_call`.
+> Each chat's three-dot menu has **Permissions** with two switches for that one person:
+> **Allow messages** (`PUT /v1/conversations/:id/messages`; off = they can't send and
+> see a waiting note) and **Allow calls** (`PUT /v1/conversations/:id/calls`). Both are
+> off for anyone new. The call buttons are never greyed out: pressing one without
+> permission offers to **ask**, which leaves a `call_request` message in the chat
+> (`POST …/calls/request`) with **Allow / Not now** for the other person
+> (`POST …/calls/decline`). The asker is told about "Not now" and may ask again.
 
 > `total_post` counts **posts only** — reels live in a separate collection and are
 > not included.

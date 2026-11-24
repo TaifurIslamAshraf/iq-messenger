@@ -399,6 +399,12 @@ fun ChatScreen(
 
     // Upload progress must not remap history and format every message's timestamp.
     // Only server changes invalidate these bubbles; uploads are merged separately.
+    // Only the newest call request carries its answer; older ones are history.
+    val newestCallRequest by remember(conversationId) {
+        derivedStateOf {
+            thread.lastOrNull { it.type == "call_request" && !it.isDeleted }?.let { it.id.ifBlank { it.clientId } }
+        }
+    }
     val sentMessages by remember(conversationId) {
         derivedStateOf {
             val name = remote?.peer?.fullname.orEmpty()
@@ -591,6 +597,84 @@ fun ChatScreen(
                 }
             }
             callsBusy = false
+        }
+    }
+
+    /** The 'Allow messages' switch: flipped first and put back on a refusal, like calls. */
+    var messagesBusy by remember(conversationId) { mutableStateOf(false) }
+    fun allowMessages(allow: Boolean) {
+        val auth = token ?: return
+        val before = remote ?: return
+        if (messagesBusy) return
+        messagesBusy = true
+        callsFailed = false
+        remote = before.copy(access = before.access.copy(peerCanSend = allow))
+        scope.launch {
+            when (val r = ConversationsApi.allowMessages(auth, conversationId, allow)) {
+                is ApiResult.Success -> remote = r.data
+                is ApiResult.Failure -> {
+                    remote = before
+                    callsFailed = true
+                }
+            }
+            messagesBusy = false
+        }
+    }
+
+    /**
+     * The call buttons stay live when this person has not allowed calls: pressing
+     * one explains why and offers to ask, rather than a dimmed button that says
+     * nothing. Holds the kind of call pressed while that popup is open.
+     */
+    var askingFor by remember(conversationId) { mutableStateOf<Boolean?>(null) }
+    var askBusy by remember(conversationId) { mutableStateOf(false) }
+    var askError by remember(conversationId) { mutableStateOf<String?>(null) }
+
+    fun askToCall() {
+        val auth = token ?: return
+        if (askBusy) return
+        askBusy = true
+        askError = null
+        scope.launch {
+            when (val r = ConversationsApi.askToCall(auth, conversationId, UUID.randomUUID().toString())) {
+                is ApiResult.Success -> {
+                    remote = r.data.conversation
+                    r.data.message?.let {
+                        ChatMessages.store(context, it)
+                        ChatRepository.invalidate()
+                    }
+                    askingFor = null
+                }
+                is ApiResult.Failure -> askError = r.message.ifBlank { "Couldn't send the request." }
+            }
+            askBusy = false
+        }
+    }
+
+    /** "Not now" to their call request; the person who asked is told. */
+    fun declineCall() {
+        val auth = token ?: return
+        val before = remote ?: return
+        val asked = before.access.callRequest ?: return
+        if (callsBusy) return
+        callsBusy = true
+        remote = before.copy(access = before.access.copy(callRequest = asked.copy(pending = false)))
+        scope.launch {
+            when (val r = ConversationsApi.declineCall(auth, conversationId)) {
+                is ApiResult.Success -> remote = r.data
+                is ApiResult.Failure -> remote = before
+            }
+            callsBusy = false
+        }
+    }
+
+    /** Every way of calling from this screen comes through here. */
+    fun placeCall(video: Boolean) {
+        if (access.canCall) {
+            if (video) onVideoCall(person.id) else onAudioCall(person.id)
+        } else {
+            askError = null
+            askingFor = video
         }
     }
 
@@ -1269,8 +1353,8 @@ fun ChatScreen(
             ChatTopBar(
                 person = person,
                 onBack = onBack,
-                onAudioCall = { onAudioCall(person.id) },
-                onVideoCall = { onVideoCall(person.id) },
+                onAudioCall = { placeCall(false) },
+                onVideoCall = { placeCall(true) },
                 onSearch = { searchOpen = true },
                 onShared = { sharedOpen = true },
                 // The face and the name open the person; the overflow menu keeps
@@ -1399,10 +1483,15 @@ fun ChatScreen(
                                             else message.id
                                     },
                                     onJumpToQuoted = { id -> jumpTo(id) },
-                                    onCallBack = { video ->
-                                        if (video) onVideoCall(person.id)
-                                        else onAudioCall(person.id)
+                                    onCallBack = { video -> placeCall(video) },
+                                    callRequest = if (message.id == newestCallRequest) {
+                                        callRequestState(message.fromMe, access)
+                                    } else {
+                                        null
                                     },
+                                    callRequestBusy = callsBusy,
+                                    onAllowCall = { allowCalls(true) },
+                                    onDeclineCall = ::declineCall,
                                     onLongPress = { at ->
                                         // The bubble model has no server fields, so the
                                         // real message is found by the id it was mapped
@@ -1704,8 +1793,8 @@ fun ChatScreen(
             conversationId = conversationId,
             muted = remote?.muted == true,
             token = token,
-            onAudioCall = { onAudioCall(person.id) },
-            onVideoCall = { onVideoCall(person.id) },
+            onAudioCall = { placeCall(false) },
+            onVideoCall = { placeCall(true) },
             onSearch = { searchOpen = true },
             onShared = { sharedOpen = true },
             onDismiss = { peerOpen = false }
@@ -1715,15 +1804,28 @@ fun ChatScreen(
     if (permissionsOpen) {
         PermissionsSheet(
             person = person,
-            allowCalls = access.peerCanCall,
-            theyAllowCalls = access.canCall,
-            busy = callsBusy,
+            access = access,
+            messagesBusy = messagesBusy,
+            callsBusy = callsBusy,
             failed = callsFailed,
+            onAllowMessages = ::allowMessages,
             onAllowCalls = ::allowCalls,
             onDismiss = {
                 permissionsOpen = false
                 callsFailed = false
             }
+        )
+    }
+
+    askingFor?.let { video ->
+        CallPermissionDialog(
+            name = person.name,
+            video = video,
+            access = access,
+            busy = askBusy,
+            error = askError,
+            onAsk = ::askToCall,
+            onDismiss = { askingFor = null }
         )
     }
 
@@ -1777,6 +1879,7 @@ private fun ChatMessage.toBubble(
     fromMe = senderUid == myUid,
     kind = when {
         call != null -> MessageKind.CALL
+        type == "call_request" -> MessageKind.CALL_REQUEST
         type == "voice" -> MessageKind.VOICE
         else -> MessageKind.TEXT
     },
@@ -2411,13 +2514,7 @@ private fun ChatTopBar(
     onDetails: () -> Unit = {},
     /** What this person may do here: for now, whether they may call. */
     onPermissions: () -> Unit = {},
-    /**
-     * Whether a call may be placed to this person at all.
-     *
-     * Theirs to decide, not this phone's: until they turn their own 'Allow calls'
-     * on, the server refuses the call. Showing live buttons for a call that cannot
-     * happen would be this app promising something the other person has declined.
-     */
+    /** Whether they let this phone call them; only changes what a screen reader hears. */
     canCall: Boolean = true
 ) {
     val d = IqTheme.dimens
@@ -2480,17 +2577,16 @@ private fun ChatTopBar(
                     }
                 }
             }
-            // The reason travels with the label, so a screen reader says why the
-            // button will not answer rather than only that it is dimmed.
-            val callLabel = if (canCall) "" else " - " + person.name + " has not allowed calls"
+            // Never dimmed: a press without permission explains and offers to ask.
+            // The reason still travels with the label for a screen reader.
+            val callLabel = if (canCall) "" else " - " + person.name + " has not allowed calls yet"
             CircleIconButton(
                 icon = IqIcons.Phone,
                 contentDescription = "Voice call" + callLabel,
                 onClick = onAudioCall,
                 size = d.iconButton,
                 background = CrimsonTint,
-                tint = Crimson,
-                enabled = canCall
+                tint = Crimson
             )
             CircleIconButton(
                 icon = IqIcons.Videocam,
@@ -2498,8 +2594,7 @@ private fun ChatTopBar(
                 onClick = onVideoCall,
                 size = d.iconButton,
                 background = CrimsonTint,
-                tint = Crimson,
-                enabled = canCall
+                tint = Crimson
             )
             Box {
                 CircleIconButton(
@@ -3056,11 +3151,16 @@ private fun MessageRow(
     /** True for a message that has just landed, which plays a short entrance. */
     arriving: Boolean = false,
     /** Ring them again, with the kind of call the message is about. */
-    onCallBack: (Boolean) -> Unit = {}
+    onCallBack: (Boolean) -> Unit = {},
+    /** Set on the newest call request only: where its answer stands. */
+    callRequest: CallRequestState? = null,
+    callRequestBusy: Boolean = false,
+    onAllowCall: () -> Unit = {},
+    onDeclineCall: () -> Unit = {}
 ) {
     val d = IqTheme.dimens
-    // The swipe answers a message, and a call is not one.
-    val canReply = message.kind != MessageKind.CALL
+    // The swipe answers a message, and a call - or a request for one - is not one.
+    val canReply = message.kind != MessageKind.CALL && message.kind != MessageKind.CALL_REQUEST
     val endsRun = message.group == BubbleGroup.SINGLE || message.group == BubbleGroup.LAST
     val startsRun = message.group == BubbleGroup.SINGLE || message.group == BubbleGroup.FIRST
     val density = LocalDensity.current
@@ -3302,6 +3402,15 @@ private fun MessageRow(
                                     ImageBubble(message, onOpenMedia)
                             message.kind == MessageKind.CALL ->
                                 CallBubble(message) { video -> onCallBack(video) }
+                            message.kind == MessageKind.CALL_REQUEST ->
+                                CallRequestBubble(
+                                    message = message,
+                                    name = peer.name,
+                                    state = callRequest,
+                                    busy = callRequestBusy,
+                                    onAllow = onAllowCall,
+                                    onDecline = onDeclineCall
+                                )
                             message.kind == MessageKind.VOICE -> VoiceBubble(message)
                             else -> TextBubble(message)
                         }
@@ -3669,6 +3778,117 @@ private fun CallBubble(message: Message, onCallBack: (Boolean) -> Unit) {
                 maxLines = 1
             )
         }
+    }
+}
+
+/** Where the newest call request's answer stands, from this phone's side. */
+enum class CallRequestState { WAITING, ASKING_YOU, ALLOWED, NOT_NOW }
+
+internal fun callRequestState(fromMe: Boolean, access: ConversationAccess): CallRequestState {
+    val asked = access.callRequest
+    val allowed = if (fromMe) access.canCall else access.peerCanCall
+    return when {
+        allowed -> CallRequestState.ALLOWED
+        asked != null && !asked.pending -> CallRequestState.NOT_NOW
+        fromMe -> CallRequestState.WAITING
+        asked != null && !asked.outgoing -> CallRequestState.ASKING_YOU
+        else -> CallRequestState.NOT_NOW
+    }
+}
+
+/**
+ * Someone asking to be allowed to call, in the chat where it was asked.
+ *
+ * A record of an event like a call, so it shares the call's neutral shape. The
+ * newest one carries its answer: Allow / Not now while it waits for this phone,
+ * or a line saying how it went. Older ones are just history.
+ */
+@Composable
+private fun CallRequestBubble(
+    message: Message,
+    name: String,
+    state: CallRequestState?,
+    busy: Boolean,
+    onAllow: () -> Unit,
+    onDecline: () -> Unit
+) {
+    val d = IqTheme.dimens
+    val first = name.substringBefore(" ").ifBlank { name }
+    val shape = BubbleShape(fromMe = message.fromMe, radius = d.scaled(20), group = message.group)
+    Column(
+        Modifier
+            .widthIn(max = d.contentMaxWidth)
+            .wrapContentWidth(if (message.fromMe) Alignment.End else Alignment.Start)
+            .clip(shape)
+            .background(FieldGrey)
+            .padding(d.gapMd)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(d.avatarSm)
+                    .clip(CircleShape)
+                    .background(Color.White),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(IqIcons.Phone, null, Modifier.size(d.iconSm), tint = Crimson)
+            }
+            Spacer(Modifier.width(d.gapSm))
+            Column {
+                Text(
+                    if (message.fromMe) "You asked to call $first" else "$first wants to call you",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Ink
+                )
+                val detail = when (state) {
+                    CallRequestState.WAITING -> "Waiting for $first to allow calls"
+                    CallRequestState.ASKING_YOU -> "Voice and video calls"
+                    CallRequestState.ALLOWED -> if (message.fromMe) "$first allowed calls" else "You allowed calls"
+                    CallRequestState.NOT_NOW -> if (message.fromMe) "$first said not now" else "You said not now"
+                    null -> ""
+                }
+                if (detail.isNotEmpty()) {
+                    Text(detail, style = MaterialTheme.typography.bodyMedium, color = InkMuted)
+                }
+            }
+        }
+
+        if (state == CallRequestState.ASKING_YOU) {
+            Spacer(Modifier.height(d.gapMd))
+            Row(horizontalArrangement = Arrangement.spacedBy(d.gapSm)) {
+                RequestChoice("Not now", Color.White, Ink, busy, Modifier.weight(1f), onDecline)
+                RequestChoice("Allow", Crimson, Color.White, busy, Modifier.weight(1f), onAllow)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequestChoice(
+    label: String,
+    background: Color,
+    content: Color,
+    busy: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    val d = IqTheme.dimens
+    Box(
+        modifier
+            .height(d.buttonHeight)
+            .clip(RoundedCornerShape(d.radiusMd))
+            .background(background)
+            .clickable(enabled = !busy, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (busy) content.copy(alpha = 0.5f) else content,
+            maxLines = 1
+        )
     }
 }
 
