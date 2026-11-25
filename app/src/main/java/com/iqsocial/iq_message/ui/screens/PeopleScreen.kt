@@ -106,7 +106,10 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
     val grouped = remember(query, source) {
         source
             .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
-            .groupBy { it.name.first().uppercaseChar() }
+            // A contact saved as a number alone has an empty name, and `first()`
+            // on an empty string throws - one such entry in the phone book took
+            // the whole tab down. Nameless contacts file under '#'.
+            .groupBy { it.name.trim().firstOrNull()?.uppercaseChar() ?: '#' }
             .toSortedMap()
     }
 

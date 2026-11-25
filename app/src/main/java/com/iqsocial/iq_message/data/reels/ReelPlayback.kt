@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.os.PowerManager
 import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.common.AudioAttributes
@@ -12,6 +13,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
@@ -19,6 +21,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -100,6 +103,7 @@ class ReelSession(context: Context) {
 
     private val builder = DefaultPreloadManager.Builder(app, control)
         .setMediaSourceFactory(DefaultMediaSourceFactory(cachedSource(app)))
+        .setLoadControl(reelLoadControl())
 
     /** The one player every page shares. Built by the preload manager's builder,
      *  so the two use the same loaders and the player can take a preloaded source
@@ -125,6 +129,19 @@ class ReelSession(context: Context) {
     var shown by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Each reel's real shape - width over height, as the decoder reports it - by
+     * reel id.
+     *
+     * The page sizes the video's frame from this, so the frame is this reel's
+     * shape before its first picture is drawn into it. It used to be the player
+     * view's own business, and the player view asked the shared player - which,
+     * at the moment a new page took it, was still describing the *previous*
+     * reel. A landscape reel followed by an upright one drew the upright one's
+     * first frames into a landscape box, squashed, until the new size caught up.
+     */
+    val ratios = mutableStateMapOf<String, Float>()
+
     /** The reel [playAt] last asked for, waiting for its first frame. */
     private var pending: String? = null
 
@@ -147,15 +164,32 @@ class ReelSession(context: Context) {
         player.addAnalyticsListener(object : AnalyticsListener {
             private val window = Timeline.Window()
 
+            /** Which reel the playback thread was on when it reported this. */
+            private fun reelOf(eventTime: AnalyticsListener.EventTime): String? {
+                val timeline = eventTime.timeline
+                if (timeline.isEmpty || eventTime.windowIndex >= timeline.windowCount) return null
+                return timeline.getWindow(eventTime.windowIndex, window).mediaItem.mediaId
+            }
+
             override fun onRenderedFirstFrame(
                 eventTime: AnalyticsListener.EventTime,
                 output: Any,
                 renderTimeMs: Long
             ) {
-                val timeline = eventTime.timeline
-                if (timeline.isEmpty || eventTime.windowIndex >= timeline.windowCount) return
-                val drawn = timeline.getWindow(eventTime.windowIndex, window).mediaItem.mediaId
+                val drawn = reelOf(eventTime)
                 if (drawn == pending) shown = drawn
+            }
+
+            // Reported before the first frame is, so by the time a page shows its
+            // video the frame around it already has the video's own shape.
+            override fun onVideoSizeChanged(
+                eventTime: AnalyticsListener.EventTime,
+                videoSize: VideoSize
+            ) {
+                val reel = reelOf(eventTime) ?: return
+                if (videoSize.width <= 0 || videoSize.height <= 0) return
+                ratios[reel] =
+                    videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
             }
         })
     }
@@ -274,6 +308,40 @@ class ReelSession(context: Context) {
         }
 
         val GENEROUS = listOf(10_000L, 4_000L, 2_000L)
-        val SPARING = listOf(5_000L)
+
+        /**
+         * Two ahead on mobile data, not one.
+         *
+         * With one, a second swipe in quick succession landed on a reel nothing
+         * had touched - manifest, playlist, first segment, all from cold - and on
+         * a fast 4.5G connection that was still well over a second of nothing.
+         * The second reel gets less than the first because it is less likely to
+         * be reached, and a few seconds is all it needs to start at once.
+         */
+        val SPARING = listOf(5_000L, 3_000L)
+
+        /**
+         * When playback may start, and how far ahead the playing reel buffers.
+         *
+         * Media3's defaults are for long-form video: it waits for 2.5 seconds of
+         * picture before starting, and buffers up to 50 seconds ahead. For a reel
+         * the first is the whole problem - a reel that was not preloaded sat
+         * blank while two and a half seconds downloaded, even on a connection
+         * that could deliver the first half-second almost at once. Half a second
+         * is enough to start on; the reel keeps loading while it plays.
+         *
+         * The ceiling comes down too. A reel is seconds long and loops, and
+         * fifty seconds buffered ahead of something swiped away after five is
+         * data downloaded for nothing.
+         */
+        fun reelLoadControl(): DefaultLoadControl =
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    /* minBufferMs = */ 10_000,
+                    /* maxBufferMs = */ 20_000,
+                    /* bufferForPlaybackMs = */ 500,
+                    /* bufferForPlaybackAfterRebufferMs = */ 1_000
+                )
+                .build()
     }
 }

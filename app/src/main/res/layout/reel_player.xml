@@ -12,11 +12,12 @@
     shutter so the thumbnail underneath shows until the first frame is ready
     instead of a black flash.
 
-    fixed_width: the video takes the screen's width and its own height from its
-    ratio, centred. Nothing is cut off - zoom filled the screen by cropping the
-    sides, which lost most of anything that was not upright. An upright reel on a
-    phone taller than 9:16 has a band of black above and below; that is the whole
-    picture, shown whole.
+    fill: the video fills this view exactly, because this view is already the
+    video's shape - the page lays it out from the reel's own ratio (see ReelPage in
+    Reels.kt). Leaving the shape to the player view's own resizing was the bug:
+    it reads the shape from the player, and the player shared between pages was
+    still describing the previous reel when a new page took it, so the first
+    frames of an upright reel were drawn into a landscape box, squashed.
 -->
 <androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -24,5 +25,5 @@
     android:layout_height="match_parent"
     app:surface_type="texture_view"
     app:use_controller="false"
-    app:resize_mode="fixed_width"
+    app:resize_mode="fill"
     app:shutter_background_color="@android:color/transparent" />

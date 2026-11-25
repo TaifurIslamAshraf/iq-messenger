@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -79,6 +81,7 @@ import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
+import kotlinx.coroutines.launch
 
 /* ========================================================================= */
 /*  The strip, under the search on the chat list                             */
@@ -288,7 +291,20 @@ fun ReelsScreen(
     LaunchedEffect(pager.settledPage) {
         paused = false
         session.playAt(pager.settledPage, reels)
-        if (pager.settledPage >= reels.size - 4) ReelsFeed.loadMore(token)
+
+        // The thumbnails of the reels around this one, fetched now while this one
+        // plays, so a page that slides in already has its picture. Without this a
+        // page only began fetching its thumbnail as it appeared, and a quick
+        // flick through several showed black pages until each one arrived.
+        // Thumbnails are small; five ahead and one behind cover a fast flick.
+        val here = pager.settledPage
+        for (near in (here - 1)..(here + THUMBS_AHEAD)) {
+            val url = reels.getOrNull(near)?.thumbnailUrl ?: continue
+            if (near == here || url.isBlank()) continue
+            launch { RemoteImage.load(url, targetPx = RemoteImage.PREVIEW_PX) }
+        }
+
+        if (here >= reels.size - 4) ReelsFeed.loadMore(token)
     }
 
     // Quiet when the app is not on screen, and back where it was when it returns.
@@ -313,11 +329,18 @@ fun ReelsScreen(
         VerticalPager(
             state = pager,
             key = { reels[it].id },
+            // The next page is composed before it is scrolled to - its frame laid
+            // out and its thumbnail on it - so the first pixels of a swipe are a
+            // picture rather than a page being built.
+            beyondViewportPageCount = 1,
             modifier = Modifier.fillMaxSize()
         ) { page ->
             val playing = page == pager.settledPage
             ReelPage(
                 reel = reels[page],
+                // The decoder's word once it has spoken for this reel, the
+                // server's until then - never another reel's.
+                ratio = session.ratios[reels[page].id] ?: reels[page].shape,
                 player = if (playing) session.player else null,
                 videoReady = playing && session.shown == reels[page].id,
                 paused = playing && paused,
@@ -348,6 +371,8 @@ fun ReelsScreen(
 @Composable
 private fun ReelPage(
     reel: Reel,
+    /** Width over height of this reel's video. */
+    ratio: Float,
     player: Player?,
     /** This reel's own first frame has been drawn; until then, its thumbnail. */
     videoReady: Boolean,
@@ -366,31 +391,65 @@ private fun ReelPage(
                 onClick = onTap
             )
     ) {
-        // Under the video, and what shows until its first frame does. Framed the
-        // same way the video is - the screen's width, its own height, centred - so
-        // the first frame lands exactly on top of it instead of jumping in size.
-        thumb?.let {
-            Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillWidth)
+        // The video's own frame: the screen's width and the height its ratio gives
+        // it, centred - or, for a video taller than the screen, the screen's height
+        // and the width that gives. Laid out here from the reel's known shape, not
+        // left to the player view, which learns a new video's shape only after the
+        // video has started and meanwhile goes on using the last one's.
+        //
+        // The thumbnail and the video share this one frame. The thumbnail is
+        // cropped into it rather than drawn at its own shape: Cloudflare's
+        // thumbnails are not always the video's shape, and the gap between the two
+        // was a picture that sat as a short wide band for a second and then
+        // jumped to a tall one. Now the frame is the right shape from the first
+        // moment, the thumbnail fills it without being stretched, and the first
+        // video frame lands exactly on top of it.
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .aspectRatio(ratio.coerceIn(0.3f, 3f))
+        ) {
+            thumb?.let {
+                Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            if (player != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        LayoutInflater.from(ctx).inflate(R.layout.reel_player, null) as PlayerView
+                    },
+                    // Attached at once, so the surface is ready, but not seen until
+                    // the frame on it belongs to this reel - see ReelSession.shown.
+                    // On the view itself rather than a Compose layer: a TextureView
+                    // honours its own alpha without a second layer around it.
+                    update = { view ->
+                        view.player = player
+                        view.alpha = if (videoReady) 1f else 0f
+                    },
+                    // Let go of the player as the page leaves, so the next page can
+                    // take it without two views drawing one video.
+                    onRelease = { view -> view.player = null },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
-        if (player != null) {
-            AndroidView(
-                factory = { ctx ->
-                    LayoutInflater.from(ctx).inflate(R.layout.reel_player, null) as PlayerView
-                },
-                // Attached at once, so the surface is ready, but not seen until
-                // the frame on it belongs to this reel - see ReelSession.shown.
-                // On the view itself rather than a Compose layer: a TextureView
-                // honours its own alpha without a second layer around it.
-                update = { view ->
-                    view.player = player
-                    view.alpha = if (videoReady) 1f else 0f
-                },
-                // Let go of the player as the page leaves, so the next page can
-                // take it without two views drawing one video.
-                onRelease = { view -> view.player = null },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
+
+        // A soft shade down the right edge, under the counters. White icons on a
+        // white video - a wall, a sky, a screen recording - all but vanished,
+        // and a shadow alone cannot rescue a white icon on a white field. Faded
+        // in from the middle of the screen, so there is no visible edge to it.
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(RIGHT_SHADE)
+                .background(
+                    Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.4f)
+                    )
+                )
+        )
 
         AnimatedVisibility(
             visible = paused,
@@ -531,7 +590,7 @@ private fun Counter(icon: ImageVector, count: Int, tint: Color) {
                     .size(COUNTER_SIZE)
                     .offset(y = SHADOW_DROP)
                     .blur(SHADOW_BLUR),
-                tint = Color.Black.copy(alpha = 0.35f)
+                tint = Color.Black.copy(alpha = 0.55f)
             )
             Icon(icon, null, Modifier.size(COUNTER_SIZE), tint = tint)
         }
@@ -546,7 +605,7 @@ private fun Counter(icon: ImageVector, count: Int, tint: Color) {
 
 /** The same light shadow under every word drawn over a reel. */
 private val TextShade = Shadow(
-    color = Color.Black.copy(alpha = 0.45f),
+    color = Color.Black.copy(alpha = 0.6f),
     offset = Offset(0f, 2f),
     blurRadius = 6f
 )
@@ -611,5 +670,19 @@ private val AVATAR_SIZE = androidx.compose.ui.unit.Dp(35f)
 
 /** How far below the icon its shadow falls, and how soft it is. */
 private val SHADOW_DROP = androidx.compose.ui.unit.Dp(1.5f)
-private val SHADOW_BLUR = androidx.compose.ui.unit.Dp(3f)
+private val SHADOW_BLUR = androidx.compose.ui.unit.Dp(4f)
+
+/** How far in from the right edge the shade behind the counters reaches. */
+private val RIGHT_SHADE = androidx.compose.ui.unit.Dp(120f)
+
+/**
+ * A reel's shape as the server describes it: its own width and height when both
+ * came, the `ratio` field otherwise. The pair is the measurement; the ratio is a
+ * number somebody computed from it, and may have been rounded or defaulted.
+ */
+private val Reel.shape: Float
+    get() = if (width > 0 && height > 0) width.toFloat() / height else ratio
 private const val CARDS_WHILE_LOADING = 5
+
+/** How many reels ahead of the playing one have their thumbnails fetched early. */
+private const val THUMBS_AHEAD = 5

@@ -1,6 +1,8 @@
 package com.iqsocial.iq_message.data.call
 
 import android.graphics.Matrix
+import android.opengl.EGL14
+import android.opengl.EGLContext
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.util.Log
@@ -53,7 +55,33 @@ class CameraFilter : VideoProcessor {
      * tearing or a flash of the wrong frame. Each slot is taken when it is drawn
      * into and given back when the frame it belongs to is released.
      */
-    private val slots = Array(SLOTS) { Slot() }
+    private var slots = Array(SLOTS) { Slot() }
+
+    /**
+     * The GL context everything above was made in.
+     *
+     * This filter lives as long as the process - one for every call - but each
+     * call's capturer brings an EGL context of its own, and a texture or a
+     * framebuffer is a number that only means something inside the context that
+     * made it. The slots were made once and kept: from the second call on they
+     * held the first call's numbers, and `setSize` at an unchanged size does
+     * nothing, so nothing ever noticed. The filter drew into a framebuffer that
+     * did not exist and handed downstream a texture name that, in the new
+     * context, was nothing or somebody else's. The encoder reading it raised a GL
+     * error inside native code, and WebRTC answers that by aborting the process:
+     * the SIGABRT Sentry caught here.
+     *
+     * So every frame checks which context is current, and a different one - or a
+     * capturer that has stopped since - means building afresh.
+     */
+    private var madeIn: EGLContext? = null
+
+    /** Passes in this context that ended in a GL error. Reset with the context. */
+    private var failures = 0
+
+    /** Set when the capturer stops; the next frame, on its own thread, rebuilds. */
+    @Volatile
+    private var stale = true
 
     private val quad: FloatBuffer = floats(
         // x, y, u, v - a triangle strip covering the whole target
@@ -72,12 +100,33 @@ class CameraFilter : VideoProcessor {
     override fun onCapturerStarted(success: Boolean) = Unit
 
     override fun onCapturerStopped() {
-        // Deliberately not releasing GL objects here: this runs on whatever thread
-        // stopped the capturer, and GL objects belong to the thread whose context
-        // made them. They go when the context does, which is when the capturer's
-        // texture helper is disposed.
+        // Deliberately not touching the GL objects here: this runs on whatever
+        // thread stopped the capturer, and GL objects belong to the thread whose
+        // context made them. They go when that context does. Only marked, so the
+        // next frame - on the capture thread, in whatever context it brings -
+        // starts again from nothing. A new context can even reuse the old one's
+        // handle, which is why the context comparison alone is not enough.
+        stale = true
+    }
+
+    /**
+     * Forgets every GL object made in some other context and starts again in this
+     * one.
+     *
+     * Forgotten, not deleted: their names belong to a context that is gone, and in
+     * this one the same numbers may name objects that are not ours - deleting them
+     * would delete the camera's own texture. A slot still lent to a frame in
+     * flight is simply dropped; its frame gives it back to nobody when released.
+     */
+    private fun adopt(context: EGLContext) {
         oesProgram = null
         flatProgram = null
+        slots = Array(SLOTS) { Slot() }
+        // A capturer stopping is a fresh start; a failed pass marking itself stale
+        // is not, or the limit below would never be reached.
+        if (context != madeIn) failures = 0
+        madeIn = context
+        stale = false
     }
 
     override fun onFrameCaptured(frame: VideoFrame) {
@@ -123,6 +172,23 @@ class CameraFilter : VideoProcessor {
         val height = buffer.height
         if (width <= 0 || height <= 0) return null
 
+        // No context current is no GL at all: pass the frame through untouched.
+        val current = EGL14.eglGetCurrentContext()
+        if (current == null || current == EGL14.EGL_NO_CONTEXT) return null
+        if (stale || current != madeIn) adopt(current)
+        // A context where the pass keeps failing gets no more attempts: rebuilding
+        // the shaders every frame to fail again would cost more than the filter is
+        // worth. Plain frames until the next context.
+        if (failures >= MAX_FAILURES) return null
+
+        // Errors left over from whoever drew last on this thread - the camera's
+        // own texture update - are theirs, not ours. Cleared so the check after
+        // drawing reads only what this pass did. Bounded: a context that is lost
+        // reports an error for ever.
+        for (attempt in 0 until MAX_STALE_ERRORS) {
+            if (GLES20.glGetError() == GLES20.GL_NO_ERROR) break
+        }
+
         val slot = slots.firstOrNull { it.free } ?: return null
         val target = slot.take(width, height)
 
@@ -139,6 +205,17 @@ class CameraFilter : VideoProcessor {
         matrixFrom(buffer.transformMatrix)
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, target.frameBufferId)
+        // A framebuffer that is not complete cannot be drawn into, and a texture
+        // that was not drawn into must not go downstream: the original frame goes
+        // instead. Cheaper than a crash in the encoder, which is where a bad
+        // texture would otherwise be found.
+        if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) !=
+            GLES20.GL_FRAMEBUFFER_COMPLETE
+        ) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            slot.give()
+            return null
+        }
         GLES20.glViewport(0, 0, width, height)
         GLES20.glUseProgram(program.id)
 
@@ -170,6 +247,16 @@ class CameraFilter : VideoProcessor {
         GLES20.glDisableVertexAttribArray(program.coords)
         GLES20.glBindTexture(textureTarget, 0)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+
+        // Anything this pass got wrong, the original frame is sent instead.
+        val error = GLES20.glGetError()
+        if (error != GLES20.GL_NO_ERROR) {
+            Log.w(TAG, "Filter pass failed with GL error $error; sending the frame as it came")
+            failures++
+            stale = true
+            slot.give()
+            return null
+        }
 
         // The output is a plain RGB texture the right way up, so its own transform
         // is the identity - the input's matrix was spent in the shader above.
@@ -295,6 +382,12 @@ class CameraFilter : VideoProcessor {
 
     private companion object {
         const val TAG = "CameraFilter"
+
+        /** Failed passes in one context before the filter stands aside in it. */
+        const val MAX_FAILURES = 3
+
+        /** How many leftover GL errors are cleared before a pass, at most. */
+        const val MAX_STALE_ERRORS = 8
 
         /** Three is enough for a frame in the encoder and one being drawn. */
         const val SLOTS = 3

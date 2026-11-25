@@ -241,7 +241,15 @@ fun RewardsScreen(
                             "${state.slotsUsed} of ${state.slotsTotal} slots used"
                         )
                     }
-                    items(state.slots, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
+                    // Only slots with somebody in them - a row draws nothing
+                    // for an empty one anyway - and each person-and-kind once.
+                    // The key is built from those two, and a lazy list given the
+                    // same key twice does not skip the second: it throws. Two
+                    // empty slots of one kind would have been exactly that.
+                    val filled = state.slots
+                        .filter { it.person?.uid?.isNotBlank() == true }
+                        .distinctBy { it.person?.uid + it.kind.wire }
+                    items(filled, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
                         SlotRow(
                             slot = slot,
                             liveMs = liveMs,

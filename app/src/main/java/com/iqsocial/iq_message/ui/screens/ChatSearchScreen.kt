@@ -95,14 +95,22 @@ fun ChatSearchScreen(
         // request for every half-word on the way to the name.
         delay(300)
         searching = true
+        // Each result once. The lists below key their rows by id, and a lazy
+        // list handed one key twice throws rather than skipping the repeat - so
+        // a server that answered with the same conversation twice would have
+        // crashed the search instead of showing it.
         chats = when (val r = ConversationsApi.search(token, q)) {
-            is ApiResult.Success -> r.data
+            is ApiResult.Success -> r.data.distinctBy { it.id }
             is ApiResult.Failure -> emptyList()
         }
         // Searching a messenger means searching what was said, not only who said
         // it, so message text is searched alongside the names.
+        // A hit without its message or its conversation has nothing to show and
+        // nowhere to go, so it is left out rather than keyed on a hash.
         messages = when (val r = MessagesApi.search(token, q)) {
             is ApiResult.Success -> r.data.items
+                .filter { it.message != null && it.conversation != null }
+                .distinctBy { it.message?.id }
             is ApiResult.Failure -> emptyList()
         }
         searched = q
@@ -185,7 +193,7 @@ fun ChatSearchScreen(
 
             if (typed && messages.isNotEmpty()) {
                 item { SearchHeading("Messages") }
-                items(messages, key = { "m" + (it.message?.id ?: it.hashCode().toString()) }) { hit ->
+                items(messages, key = { "m" + it.message?.id }) { hit ->
                     MessageHitRow(hit, query.trim()) {
                         hit.conversation?.id?.let {
                             keyboard?.hide()
