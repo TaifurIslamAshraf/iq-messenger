@@ -133,21 +133,18 @@ object ProfileApi {
         ).mapTo(ProfileFields::from)
 
     /**
-     * Who may message and who may call.
+     * Who may message.
      *
-     * Shared with the main IQ Social app - the same two settings, one account. The
-     * call side is enforced from the moment the server answers; the message side is
-     * stored and returned but not yet enforced by the messenger, which is the
-     * server's own note and worth not pretending otherwise in the screen.
+     * Shared with the main IQ Social app. Stored and returned but not yet enforced
+     * by the messenger. Who may call is not an account setting: it is answered per
+     * person, in each chat ([ConversationsApi.allowCalls]).
      */
     suspend fun updatePrivacy(
         token: String,
-        whoCanMessage: String? = null,
-        whoCanCall: String? = null
+        whoCanMessage: String? = null
     ): ApiResult<ProfileFields> {
         val body = JSONObject()
         whoCanMessage?.let { body.put("who_can_message", it) }
-        whoCanCall?.let { body.put("who_can_call", it) }
         return ApiClient.patch("/v1/me/privacy", body, token, MessengerConfig.BASE_URL)
             .mapTo(ProfileFields::from)
     }

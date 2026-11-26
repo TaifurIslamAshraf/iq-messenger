@@ -338,20 +338,9 @@ fun ProfileScreen(
                     onClick = onEditProfile
                 ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
 
-                // The account-wide 'who can message / who can call' pair, hidden
-                // rather than removed.
-                //
-                // Calling is now answered per conversation - the 'Allow calls'
-                // switch in a chat's own menu - and that is both narrower and
-                // easier to reason about: it is about one person, it is set where
-                // that person is, and both sides are told the moment it changes. A
-                // second, broader switch somewhere else that also decides the same
-                // thing is how people end up unable to work out why a call will not
-                // go through.
-                //
-                // The screen, the route and  are all still
-                // here and still work. Only the way in is closed, so this is one
-                // line to undo if the account-wide setting is wanted again.
+                // 'Who can message', hidden for now: the messenger does not enforce
+                // it yet. Who can call has no account-wide setting at all - it is
+                // answered per person, in each chat's three-dot Permissions.
                 if (PRIVACY_ROW_SHOWN) {
                     SettingDivider()
                     SettingRow(
@@ -365,12 +354,7 @@ fun ProfileScreen(
                         // spelled out and then truncated.
                         onClick = onPrivacy,
                         subtitle = profile?.let {
-                            if (it.whoCanMessage == it.whoCanCall) {
-                                "Messages & calls: ${readable(it.whoCanMessage)}"
-                            } else {
-                                "Msg: ${readable(it.whoCanMessage)} · " +
-                                    "Calls: ${readable(it.whoCanCall)}"
-                            }
+                            "Messages: ${readable(it.whoCanMessage)}"
                         } ?: "Security and visibility"
                     ) {
                         Text(

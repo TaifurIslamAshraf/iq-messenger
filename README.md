@@ -482,8 +482,17 @@ GET /v1/me        Authorization: Bearer <token from /v1/api/login>
 
 Returns `uid`, `fullname`, `phone_number`, `bio`, `profile_picture`, `verified`,
 `badge_key`, `chat_status` (`online`/`offline`/`away`/`busy`), `chat_last_seen`,
-`show_active_status`, `privacy_settings {who_can_message, who_can_call}`, and the
+`show_active_status`, `privacy_settings {who_can_message}`, and the
 three counts `followers`, `following`, `total_post`.
+
+> **Messages and calls are per person only.** There is no account-wide `who_can_call`.
+> Each chat's three-dot menu has **Permissions** with two switches for that one person:
+> **Allow messages** (`PUT /v1/conversations/:id/messages`; off = they can't send and
+> see a waiting note) and **Allow calls** (`PUT /v1/conversations/:id/calls`). Both are
+> off for anyone new. The call buttons are never greyed out: pressing one without
+> permission offers to **ask**, which leaves a `call_request` message in the chat
+> (`POST …/calls/request`) with **Allow / Not now** for the other person
+> (`POST …/calls/decline`). The asker is told about "Not now" and may ask again.
 
 > `total_post` counts **posts only** — reels live in a separate collection and are
 > not included.
@@ -498,7 +507,7 @@ fetched once per launch and cached:
 | "Creating smarter connections." | `bio` |
 | verified tick, always shown | only when `verified` is non-zero |
 | presence dot, always shown | `show_active_status` + `chat_status` |
-| Privacy: "Security and visibility" | the two `privacy_settings` values |
+| Privacy: "Security and visibility" | `privacy_settings.who_can_message` |
 | stats: 128 / 12.6K / 584 | `total_post` / `followers` / `following` |
 
 > **Read-only.** `PUT`, `PATCH` and `POST` on `/v1/me` all return 404, so the
@@ -519,7 +528,7 @@ reads "Your profile", the counts show a dash, and no verified tick appears.
 | `verified` | `0` | **no tick** — the mockup showed one unconditionally |
 | `bio` | `""` | shows a muted *"Add a bio"*, not the mockup's invented line |
 | `fullname` | `"Mithun sarker "` | trailing space, so the parser trims |
-| `privacy_settings` | both `following` | the row collapses to "Messages & calls: following" |
+| `privacy_settings` | `who_can_message: following` | the row reads "Messages: following" |
 | `chat_status` | `online` + `show_active_status: true` | green presence dot |
 | `followers` / `following` / `total_post` | `2` / `1` / `9` | the stat row, formerly hardcoded |
 

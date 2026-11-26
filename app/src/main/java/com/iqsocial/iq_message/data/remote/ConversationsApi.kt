@@ -85,9 +85,8 @@ object ConversationsApi {
      * set - and both phones are told over the socket, so their call button changes
      * at the same moment this switch does.
      *
-     * This is not the same as the account-wide `who_can_call` setting, and does not
-     * replace it: that one still applies on top, so somebody allowed here can still
-     * be refused there.
+     * This is the only thing that decides who may call: there is no account-wide
+     * setting on top of it.
      */
     suspend fun allowCalls(token: String, id: String, allow: Boolean): ApiResult<ChatConversation> =
         ApiClient.put(
@@ -96,6 +95,41 @@ object ConversationsApi {
             token,
             MessengerConfig.BASE_URL
         ).mapTo(ChatConversation::from)
+
+    /**
+     * Lets the other person message freely, or stops them sending anything until
+     * it is turned back on - their side then looks like a request that waits. On,
+     * with their message request open, is the same as accepting it.
+     */
+    suspend fun allowMessages(token: String, id: String, allow: Boolean): ApiResult<ChatConversation> =
+        ApiClient.put(
+            "/v1/conversations/${Uri.encode(id)}/messages",
+            JSONObject().put("allow", allow),
+            token,
+            MessengerConfig.BASE_URL
+        ).mapTo(ChatConversation::from)
+
+    /**
+     * Asks the other person to allow calls. The request is a `call_request` message
+     * in the chat, so it is pushed to them like any message. [clientId] makes a
+     * retry store it once. The message is null when an earlier request still waits.
+     */
+    suspend fun askToCall(token: String, id: String, clientId: String): ApiResult<CallRequestSent> =
+        ApiClient.post(
+            "/v1/conversations/${Uri.encode(id)}/calls/request",
+            JSONObject().put("client_id", clientId),
+            token,
+            MessengerConfig.BASE_URL
+        ).mapTo { json ->
+            CallRequestSent(
+                conversation = ChatConversation.from(json.optJSONObject("conversation") ?: JSONObject()),
+                message = json.optJSONObject("message")?.let(ChatMessage::from)
+            )
+        }
+
+    /** "Not now" to their call request. They are told, and may ask again. */
+    suspend fun declineCall(token: String, id: String): ApiResult<ChatConversation> =
+        answer(token, id, "calls/decline")
 
     suspend fun unreadCount(token: String): ApiResult<UnreadCount> =
         ApiClient.get("/v1/conversations/unread-count", token, MessengerConfig.BASE_URL)
@@ -202,3 +236,6 @@ internal inline fun <T> ApiResult<JSONObject>.mapTo(
     is ApiResult.Failure -> this
     is ApiResult.Success -> ApiResult.Success(transform(data), message)
 }
+
+/** What asking to call leaves behind: the conversation, and the request message unless one was already waiting. */
+data class CallRequestSent(val conversation: ChatConversation, val message: ChatMessage?)

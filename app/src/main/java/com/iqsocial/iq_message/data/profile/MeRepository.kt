@@ -165,13 +165,12 @@ object MeRepository {
         }
     }
 
-    /** Who may message, who may call. */
+    /** Who may message. Calls are allowed per person, in each chat. */
     suspend fun updatePrivacy(
         token: String?,
-        whoCanMessage: String? = null,
-        whoCanCall: String? = null
+        whoCanMessage: String? = null
     ): Boolean = write(token) {
-        ProfileApi.updatePrivacy(it, whoCanMessage, whoCanCall)
+        ProfileApi.updatePrivacy(it, whoCanMessage)
     }
 
     /**

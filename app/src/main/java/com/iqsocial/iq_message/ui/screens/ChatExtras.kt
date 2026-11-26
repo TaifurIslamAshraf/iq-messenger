@@ -34,14 +34,19 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +72,8 @@ import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatMessage
 import com.iqsocial.iq_message.data.remote.ChatPerson
+import com.iqsocial.iq_message.data.remote.ConversationAccess
+import com.iqsocial.iq_message.data.remote.RequestSide
 import com.iqsocial.iq_message.data.remote.MessageInfo
 import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.data.remote.Reaction
@@ -1132,5 +1140,250 @@ private fun PeerAction(
         Icon(icon, null, Modifier.size(d.icon), tint = InkMuted)
         Spacer(Modifier.width(d.gapMd))
         Text(label, style = MaterialTheme.typography.titleMedium, color = Ink)
+    }
+}
+
+/**
+ * What this one person may do: the chat's three-dot "Permissions".
+ *
+ * Both are per person and off for anyone new; nothing account-wide sits on top.
+ * The switches are this phone's answers for them. The last line is their answer
+ * for this phone, which only they can change.
+ */
+@Composable
+fun PermissionsSheet(
+    person: Person,
+    access: ConversationAccess,
+    messagesBusy: Boolean,
+    callsBusy: Boolean,
+    failed: Boolean,
+    onAllowMessages: (Boolean) -> Unit,
+    onAllowCalls: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val d = IqTheme.dimens
+    val name = person.name
+    val theirRequestWaits = access.request == RequestSide.INCOMING || access.request == RequestSide.REJECTED
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(d.radiusXl))
+                .background(Color.White)
+                .padding(vertical = d.gapLg)
+        ) {
+            Row(
+                Modifier.padding(horizontal = d.gutter),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Avatar(person = person, size = d.avatarMd)
+                Spacer(Modifier.width(d.gapMd))
+                Column(Modifier.weight(1f)) {
+                    Text("Permissions", style = MaterialTheme.typography.titleLarge, color = Ink)
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(d.gapMd))
+            HairlineDivider()
+            PermissionSwitch(
+                icon = IqIcons.ChatOutline,
+                title = "Allow messages",
+                detail = when {
+                    access.peerCanSend -> "$name can message you"
+                    theirRequestWaits -> "Turn on to accept their message request"
+                    else -> "$name can't message you"
+                },
+                checked = access.peerCanSend,
+                busy = messagesBusy,
+                onChange = onAllowMessages
+            )
+            HairlineDivider()
+            PermissionSwitch(
+                icon = IqIcons.Phone,
+                title = "Allow calls",
+                detail = if (access.peerCanCall) "$name can call you, voice and video" else "$name can't call you",
+                checked = access.peerCanCall,
+                busy = callsBusy,
+                onChange = onAllowCalls
+            )
+            if (failed) {
+                Text(
+                    "Couldn't save. Check your connection and try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Crimson,
+                    modifier = Modifier.padding(horizontal = d.gutter)
+                )
+            }
+
+            HairlineDivider()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.gutter, vertical = d.gapMd),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PermissionIcon(IqIcons.Videocam)
+                Spacer(Modifier.width(d.gapMd))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Calling $name",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        if (access.canCall) "$name lets you call them"
+                        else "$name hasn't allowed you to call yet. Tap call to ask them.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMuted
+                    )
+                }
+            }
+
+            HairlineDivider()
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.End)
+                    .padding(top = d.gapSm, end = d.gapSm)
+            ) {
+                Text("Done", color = Crimson, style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+/** One row of the sheet: the whole row is the switch, so a press is handled once. */
+@Composable
+private fun PermissionSwitch(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    detail: String,
+    checked: Boolean,
+    busy: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, enabled = !busy, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = d.gutter, vertical = d.gapMd),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PermissionIcon(icon)
+        Spacer(Modifier.width(d.gapMd))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = Ink)
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = InkMuted)
+        }
+        Spacer(Modifier.width(d.gapSm))
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = !busy,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Crimson,
+                checkedBorderColor = Crimson
+            )
+        )
+    }
+}
+
+/**
+ * What pressing call says when this person has not allowed calls yet.
+ *
+ * It offers to ask rather than failing quietly, and says where the ask stands
+ * once it is made: sent and waiting, or answered "Not now" - which, unlike a
+ * message request, the person asking is told.
+ */
+@Composable
+fun CallPermissionDialog(
+    name: String,
+    video: Boolean,
+    access: ConversationAccess,
+    busy: Boolean,
+    error: String?,
+    onAsk: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val first = name.substringBefore(" ").ifBlank { name }
+    val asked = access.callRequest?.takeIf { it.outgoing }
+    val (title, body, askLabel) = when {
+        !access.canSend -> Triple(
+            "Can't ask yet",
+            "You can ask $first to allow calls once they accept your message request.",
+            null
+        )
+        asked?.pending == true -> Triple(
+            "Request sent",
+            "Waiting for $first to allow calls. You'll be able to call as soon as they do.",
+            null
+        )
+        asked != null -> Triple("$first said not now", "You can ask again.", "Ask again")
+        else -> Triple(
+            "$first hasn't allowed calls",
+            "Ask $first to let you ${if (video) "video call" else "call"} them? They'll get your request in this chat.",
+            "Ask"
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        title = { Text(title, color = Ink) },
+        text = {
+            Column {
+                Text(body, color = InkMuted)
+                if (error != null) {
+                    Spacer(Modifier.height(IqTheme.dimens.gapSm))
+                    Text(error, color = Crimson, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            if (askLabel != null) {
+                TextButton(onClick = onAsk, enabled = !busy) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(IqTheme.dimens.iconSm),
+                            color = Crimson,
+                            strokeWidth = IqTheme.dimens.scaled(2)
+                        )
+                    } else {
+                        Text(askLabel, color = Crimson)
+                    }
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("OK", color = Crimson) }
+            }
+        },
+        dismissButton = if (askLabel != null) {
+            { TextButton(onClick = onDismiss) { Text("Cancel", color = InkMuted) } }
+        } else {
+            null
+        }
+    )
+}
+
+@Composable
+private fun PermissionIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    val d = IqTheme.dimens
+    Box(
+        Modifier
+            .size(d.iconButton)
+            .clip(CircleShape)
+            .background(CrimsonTint),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, null, Modifier.size(d.icon), tint = Crimson)
     }
 }
