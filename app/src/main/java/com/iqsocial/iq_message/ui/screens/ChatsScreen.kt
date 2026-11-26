@@ -2,7 +2,6 @@ package com.iqsocial.iq_message.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -76,7 +75,6 @@ import com.iqsocial.iq_message.data.remote.LastMessage
 import com.iqsocial.iq_message.data.remote.MessageHit
 import com.iqsocial.iq_message.data.remote.MessagesApi
 import com.iqsocial.iq_message.ui.components.Avatar
-import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.ListSkeleton
 import com.iqsocial.iq_message.ui.components.UnreadBadge
@@ -203,52 +201,15 @@ fun ChatsScreen(
                 contentPadding = PaddingValues(bottom = d.fab + d.gapXl)
             ) {
             item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
+                MessagesHeader(
+                    archived = archived,
+                    onSearch = onSearch,
+                    modifier = Modifier
                         .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(top = d.gapSm)
                 ) {
-                    Box(
-                        Modifier
-                            .size(d.iconButton)
-                            .clip(CircleShape)
-                            .border(1.5.dp, Hairline, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(IqIcons.PersonOutline, "Your profile", Modifier.size(d.icon), tint = Ink)
-                    }
-                    Spacer(Modifier.width(d.gapMd))
-                    Text(
-                        if (archived) "Archived" else "Messages",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    // Search beside the camera, where the box used to sit under
-                    // the title: the list starts with conversations instead of a
-                    // field most visits never type into.
-                    CircleIconButton(
-                        icon = IqIcons.Search,
-                        contentDescription = "Search",
-                        onClick = onSearch,
-                        iconSize = d.iconLg
-                    )
-                    CircleIconButton(
-                        icon = IqIcons.CameraOutline,
-                        contentDescription = "Camera",
-                        onClick = {},
-                        iconSize = d.iconLg
-                    )
                     Box {
-                        CircleIconButton(
-                            icon = IqIcons.MoreVert,
-                            contentDescription = "More options",
-                            onClick = { menuOpen = true }
-                        )
+                        MessagesMenuButton { menuOpen = true }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
                                 text = { Text(if (archived) "Back to inbox" else "Archived") },
@@ -295,10 +256,12 @@ fun ChatsScreen(
                 ConversationRow(
                     conversation = conversation,
                     onClick = { onOpenChat(conversation.id) },
-                    onLongPress = { acting = conversation }
+                    onLongPress = { acting = conversation },
+                    inboxStyle = true
                 )
                 HairlineDivider(
-                    Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
+                    Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter),
+                    color = Hairline.copy(alpha = 0.65f)
                 )
             }
 
@@ -346,18 +309,12 @@ fun ChatsScreen(
             )
         }
 
-        Box(
-            Modifier
+        NewMessageButton(
+            onClick = onNewMessage,
+            modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = d.gutter, bottom = d.gapLg)
-                .size(d.fab)
-                .clip(CircleShape)
-                .background(Crimson)
-                .clickable(onClick = onNewMessage),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(IqIcons.ChatCompose, "New message", Modifier.size(d.iconLg), tint = Color.White)
-        }
+        )
     }
 }
 
@@ -525,7 +482,8 @@ private fun SheetRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 internal fun ConversationRow(
     conversation: ChatConversation,
     onClick: () -> Unit,
-    onLongPress: () -> Unit = {}
+    onLongPress: () -> Unit = {},
+    inboxStyle: Boolean = false
 ) {
     val d = IqTheme.dimens
     val peer = conversation.peer
@@ -554,9 +512,17 @@ internal fun ConversationRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .then(
+                if (inboxStyle) Modifier
+                    .padding(horizontal = d.gapSm)
+                    .padding(vertical = d.gapXs / 2)
+                    .clip(RoundedCornerShape(d.radiusLg))
+                    .background(if (unseen) CrimsonTint.copy(alpha = 0.42f) else Color.White)
+                else Modifier
+            )
             .combinedClickable(onClick = onClick, onLongClick = onLongPress)
             .heightIn(min = 64.dp)
-            .padding(horizontal = d.gutter, vertical = d.gapMd),
+            .padding(horizontal = if (inboxStyle) d.gapMd else d.gutter, vertical = d.gapMd),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // The dot only ever appears for somebody the server has said is online.
@@ -569,7 +535,9 @@ internal fun ConversationRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     person.name,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleLarge.let {
+                        if (inboxStyle) it.copy(fontSize = it.fontSize * 0.94f) else it
+                    },
                     color = Ink,
                     // Heavier while something is waiting. The badge says how many,
                     // and the weight is what makes the row findable without
@@ -599,10 +567,12 @@ internal fun ConversationRow(
                     )
                 }
             }
-            Spacer(Modifier.height(d.gapXs / 2))
+            Spacer(Modifier.height(if (inboxStyle) d.scaled(3) else d.gapXs / 2))
             Text(
                 conversation.lastMessage.preview(),
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.let {
+                    if (inboxStyle) it.copy(fontSize = it.fontSize * 0.95f) else it
+                },
                 // Darker as well as heavier: grey is what the line is while it is
                 // read, and a bold grey line still reads as spent.
                 color = if (unseen) Ink else InkMuted,

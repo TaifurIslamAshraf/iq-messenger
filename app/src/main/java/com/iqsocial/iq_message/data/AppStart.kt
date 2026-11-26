@@ -4,6 +4,7 @@ import android.content.Context
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.profile.MeRepository
+import com.iqsocial.iq_message.data.profile.ProfileCache
 import com.iqsocial.iq_message.data.profile.SettingsRepository
 import com.iqsocial.iq_message.data.push.SocketAlerts
 import com.iqsocial.iq_message.data.remote.ChatSocket
@@ -36,6 +37,7 @@ object AppStart {
 
     fun ensure(context: Context) {
         val app = context.applicationContext
+        ProfileCache.init(app)
         val token = SessionStore(app).token
         if (token.isNullOrBlank()) return
 

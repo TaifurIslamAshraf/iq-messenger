@@ -91,6 +91,26 @@ object ChatMessages {
     suspend fun lowestSeq(context: Context, conversationId: String): Int =
         ChatStore.of(context).chats().lowestSeq(conversationId)
 
+    /**
+     * Stores [message] only if no row holds it yet.
+     *
+     * For a message that came from somewhere other than the thread - search, the
+     * shared-media list. Those copies can be thinner than the thread's and can lack
+     * the client id the thread's row is keyed by, so writing one over a message the
+     * thread already has would either strip it or put the same message in twice.
+     */
+    suspend fun storeIfMissing(context: Context, message: ChatMessage) {
+        if (message.id.isNotBlank() &&
+            ChatStore.of(context).chats().messageByServerId(message.id) != null
+        ) return
+        store(context, message)
+    }
+
+    /** How wide the thread's window must be for [message] to be in it. */
+    suspend fun windowFor(context: Context, message: ChatMessage): Int =
+        ChatStore.of(context).chats()
+            .countFrom(message.conversationId, message.createdAt, message.seq)
+
     /** Anything left mid-send when the app stopped is put back in the queue. */
     suspend fun recoverInterrupted(context: Context) {
         ChatStore.of(context).chats().requeueInterrupted()

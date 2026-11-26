@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
@@ -86,10 +87,19 @@ fun IQMessageTheme(widthDp: Float, heightDp: Float, content: @Composable () -> U
  * Drives status-bar icon colour per screen: dark icons over light surfaces,
  * light icons over the crimson headers and the black call screens.
  */
+/**
+ * False inside a screen that is composed but not on show, so its [SystemBarIcons]
+ * leaves the bars to the screen that is.
+ */
+val LocalBarsOwner = compositionLocalOf { true }
+
 @Composable
 fun SystemBarIcons(darkIcons: Boolean) {
     val view = LocalView.current
     if (LocalInspectionMode.current) return
+    // A screen kept alive behind another - a home tab not being looked at - must
+    // not recolour the bars under the one that is.
+    if (!LocalBarsOwner.current) return
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         WindowCompat.getInsetsController(window, view).apply {

@@ -114,3 +114,57 @@ private fun needed(video: Boolean): List<String> = buildList {
 fun micGranted(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
+
+/**
+ * Shares the screen, or stops sharing it.
+ *
+ * A screen share is a picture, so it belongs to a video call: on a voice call the
+ * call is switched to video first - the camera turned on, asking for it if it has
+ * never been granted - and only then is the system asked for the screen. A camera
+ * that is refused does not stop the share; the screen is a picture by itself, and
+ * the call is drawn as a video call either way.
+ */
+@Composable
+fun rememberScreenShareToggle(): () -> Unit {
+    val context = LocalContext.current
+    val capture = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && data != null) {
+            CallEngine.startScreenShare(data)
+        }
+    }
+    val askScreen: () -> Unit = {
+        val projection = context.getSystemService(
+            Context.MEDIA_PROJECTION_SERVICE
+        ) as? android.media.projection.MediaProjectionManager
+        if (projection != null) {
+            runCatching { capture.launch(projection.createScreenCaptureIntent()) }
+        }
+    }
+    val askCamera = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) CallEngine.switchToVideo()
+        askScreen()
+    }
+    return remember(capture, askCamera) {
+        {
+            val video = CallEngine.cameraOn ||
+                CallCenter.call?.type == CallType.VIDEO
+            when {
+                CallEngine.screenSharing -> CallEngine.stopScreenShare()
+                // Already a video call: straight to the screen.
+                video -> askScreen()
+                // A voice call: made a video call, then the screen.
+                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED -> {
+                    CallEngine.switchToVideo()
+                    askScreen()
+                }
+                else -> askCamera.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+}

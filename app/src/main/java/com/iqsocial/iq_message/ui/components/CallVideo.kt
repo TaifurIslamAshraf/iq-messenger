@@ -60,7 +60,15 @@ fun CallVideo(
                 view = renderer
             }
         },
-        update = { it.setMirror(mirror) },
+        update = {
+            it.setMirror(mirror)
+            // Followed, not set once: the same view goes from a face, filled, to
+            // a shared screen, fitted, when the other end starts sharing.
+            it.setScalingType(
+                if (fill) RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                else RendererCommon.ScalingType.SCALE_ASPECT_FIT
+            )
+        },
         onRelease = { runCatching { it.release() } }
     )
 

@@ -62,6 +62,7 @@ import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.EdgeCutShape
 import com.iqsocial.iq_message.ui.components.rememberCameraToggle
+import com.iqsocial.iq_message.ui.components.rememberScreenShareToggle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.CallPanel
@@ -94,6 +95,7 @@ fun AudioCallScreen(
     val peerAllows = peerAllowsScreenshot(call?.peer?.uid)
     SecureScreen(!peerAllows)
     val toggleCamera = rememberCameraToggle()
+    val toggleShare = rememberScreenShareToggle()
     // What the call is actually doing, rather than the assumption that it is up.
     val context = LocalContext.current
     var adding by remember { mutableStateOf(false) }
@@ -311,6 +313,14 @@ fun AudioCallScreen(
                             label = "Video",
                             active = CallEngine.cameraOn,
                             onClick = toggleCamera,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Sharing makes this a video call first - see the toggle.
+                        AudioControl(
+                            icon = IqIcons.ScreenShare,
+                            label = "Share",
+                            active = CallEngine.screenSharing,
+                            onClick = toggleShare,
                             modifier = Modifier.weight(1f)
                         )
                         AudioControl(

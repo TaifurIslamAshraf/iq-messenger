@@ -292,18 +292,8 @@ fun ReelsScreen(
         paused = false
         session.playAt(pager.settledPage, reels)
 
-        // The thumbnails of the reels around this one, fetched now while this one
-        // plays, so a page that slides in already has its picture. Without this a
-        // page only began fetching its thumbnail as it appeared, and a quick
-        // flick through several showed black pages until each one arrived.
-        // Thumbnails are small; five ahead and one behind cover a fast flick.
+        // No thumbnails fetched ahead: the viewer does not show them.
         val here = pager.settledPage
-        for (near in (here - 1)..(here + THUMBS_AHEAD)) {
-            val url = reels.getOrNull(near)?.thumbnailUrl ?: continue
-            if (near == here || url.isBlank()) continue
-            launch { RemoteImage.load(url, targetPx = RemoteImage.PREVIEW_PX) }
-        }
-
         if (here >= reels.size - 4) ReelsFeed.loadMore(token)
     }
 
@@ -381,7 +371,6 @@ private fun ReelPage(
     onOpenPerson: (uid: String, name: String, photo: String) -> Unit
 ) {
     val d = IqTheme.dimens
-    val thumb by rememberThumbnail(reel.thumbnailUrl)
     Box(
         Modifier
             .fillMaxSize()
@@ -410,9 +399,8 @@ private fun ReelPage(
                 .fillMaxWidth()
                 .aspectRatio(ratio.coerceIn(0.3f, 3f))
         ) {
-            thumb?.let {
-                Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
+            // No thumbnail under the video: the frame stays black until this reel's
+            // own first frame is drawn, and then the video simply appears.
             if (player != null) {
                 AndroidView(
                     factory = { ctx ->
@@ -683,6 +671,3 @@ private val RIGHT_SHADE = androidx.compose.ui.unit.Dp(120f)
 private val Reel.shape: Float
     get() = if (width > 0 && height > 0) width.toFloat() / height else ratio
 private const val CARDS_WHILE_LOADING = 5
-
-/** How many reels ahead of the playing one have their thumbnails fetched early. */
-private const val THUMBS_AHEAD = 5

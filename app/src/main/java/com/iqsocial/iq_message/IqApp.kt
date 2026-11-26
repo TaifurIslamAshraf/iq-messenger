@@ -22,6 +22,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.ui.layout.layout
+import com.iqsocial.iq_message.ui.theme.LocalBarsOwner
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +47,8 @@ import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.call.CallAudio
 import com.iqsocial.iq_message.data.call.CallCenter
 import com.iqsocial.iq_message.data.call.CallEngine
+import com.iqsocial.iq_message.data.profile.ProfileCache
+import com.iqsocial.iq_message.data.call.CallScreenLock
 import com.iqsocial.iq_message.data.call.CallService
 import com.iqsocial.iq_message.data.call.CallWindow
 import com.iqsocial.iq_message.data.call.RingingNotification
@@ -98,6 +104,9 @@ import com.iqsocial.iq_message.ui.screens.PersonScreen
 import com.iqsocial.iq_message.ui.screens.QrScreen
 import com.iqsocial.iq_message.ui.screens.ReelsScreen
 import com.iqsocial.iq_message.ui.screens.ChatSearchScreen
+import com.iqsocial.iq_message.ui.screens.ThreadSearchScreen
+import com.iqsocial.iq_message.ui.screens.SharedMediaScreen
+import com.iqsocial.iq_message.data.chat.ThreadJump
 import com.iqsocial.iq_message.data.reels.ReelsFeed
 import com.iqsocial.iq_message.ui.screens.ProfileScreen
 import com.iqsocial.iq_message.ui.screens.RewardsScreen
@@ -128,6 +137,17 @@ sealed interface Route {
     data object Home : Route
     data object PeopleSearch : Route
     data class Chat(val conversationId: String) : Route
+
+    /**
+     * Searching inside one conversation, over the chat it searches.
+     *
+     * Picking a result pops back to that chat and leaves the message in
+     * [ThreadJump] for it to scroll to.
+     */
+    data class ThreadSearch(val conversationId: String, val peerName: String) : Route
+
+    /** A conversation's shared media; picking an item goes back to it, as above. */
+    data class SharedMedia(val conversationId: String, val peerName: String) : Route
 
     /**
      * The settings pages that change something.
@@ -272,6 +292,15 @@ fun IqApp(
         // Faces and link pictures, kept the same way, so a cold start with no
         // connection draws them instead of initials.
         RemoteImage.cacheDir = context.applicationContext.cacheDir
+        // The account's profile from this phone straight away, then from the
+        // server. Its uid and name are read all over - "You" on a message, the
+        // header of the Settings tab - and none of those should wait on a network,
+        // or have nothing when there is none.
+        ProfileCache.init(context)
+        launch {
+            MeRepository.restore()
+            if (!MeRepository.loaded) MeRepository.load(session.token)
+        }
         VoiceWaveforms.init(context)
         CallEngine.init(context)
         CallCenter.init(context)
@@ -544,7 +573,25 @@ fun IqApp(
      */
     val minimisable = nav.current is Route.AudioCall || nav.current is Route.VideoCall
     // A picture from either end, whichever route the call started on.
-    val hasPicture = CallEngine.cameraOn || CallEngine.remoteFeeds.any { it.video != null }
+    val hasPicture = CallEngine.cameraOn || CallEngine.screenSharing ||
+        CallEngine.remoteFeeds.any { it.video != null }
+    // The proximity lock - the sensor that blanks the screen near a face - only
+    // while the phone is actually at somebody's ear: a voice call, no picture, the
+    // sound on the earpiece. On the loudspeaker or a headset the phone is in a hand
+    // or on a table and being looked at, and a hand passing over the sensor turned
+    // the screen off under the person using it. Moved back to the earpiece, it
+    // comes back on. A ringing incoming call is not answered yet, so not held up.
+    val atEar = live != null &&
+        live.status != CallStatus.ENDED &&
+        !(live.isIncoming && live.status == CallStatus.RINGING) &&
+        live.type != CallType.VIDEO &&
+        !hasPicture &&
+        CallAudio.route == CallAudio.Route.EARPIECE
+    // Keyed on the call too: `CallCenter.adopt` takes the lock itself as the call
+    // starts, and this has to have the last word over that.
+    LaunchedEffect(atEar, live?.id, live?.status) {
+        if (atEar) CallScreenLock.begin(context, video = false) else CallScreenLock.release()
+    }
     LaunchedEffect(minimisable, nav.current, hasPicture) {
         // The floating window's shape follows this too: a call that grew a picture
         // should not keep the square window a voice call was given.
@@ -968,9 +1015,37 @@ fun IqApp(
                     onVideoCall = { CallCenter.start(context, it, CallType.VIDEO) }
                 )
 
+                is Route.ThreadSearch -> ThreadSearchScreen(
+                    conversationId = route.conversationId,
+                    peerName = route.peerName,
+                    onBack = { nav.pop() },
+                    onPick = { message ->
+                        // Left for the chat before going back to it, so it is there
+                        // the moment the chat composes again.
+                        ThreadJump.request(route.conversationId, message)
+                        nav.pop()
+                    }
+                )
+
+                is Route.SharedMedia -> SharedMediaScreen(
+                    conversationId = route.conversationId,
+                    peerName = route.peerName,
+                    onBack = { nav.pop() },
+                    onPick = { message ->
+                        ThreadJump.request(route.conversationId, message)
+                        nav.pop()
+                    }
+                )
+
                 is Route.Chat -> ChatScreen(
                     conversationId = route.conversationId,
                     onBack = { nav.pop() },
+                    onOpenSearch = { peerName ->
+                        nav.push(Route.ThreadSearch(route.conversationId, peerName))
+                    },
+                    onOpenShared = { peerName ->
+                        nav.push(Route.SharedMedia(route.conversationId, peerName))
+                    },
                     onOpenProfile = { uid ->
                         val known = KnownPeople.of(route.conversationId)
                         nav.push(
@@ -1116,6 +1191,22 @@ private fun Context.activity(): Activity? {
     return null
 }
 
+/** Home tabs kept alive at once; more than there are, so all of them. */
+private const val TAB_LIMIT = 6
+
+/**
+ * Lays the content out only while [shown]. Hidden, it is neither measured, drawn
+ * nor touchable - but stays composed, with its state and its scroll position.
+ */
+private fun Modifier.shownOnlyIf(shown: Boolean): Modifier = layout { measurable, constraints ->
+    if (!shown) {
+        layout(0, 0) {}
+    } else {
+        val placeable = measurable.measure(constraints)
+        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+}
+
 @Composable
 private fun HomeShell(
     tab: HomeTab,
@@ -1141,8 +1232,29 @@ private fun HomeShell(
             .fillMaxSize()
             .imePadding()
     ) {
+        // Tabs once opened stay composed - up to [TAB_LIMIT] - and are only hidden
+        // when another is chosen. Composing just the chosen one threw the others
+        // away, so every return to a tab fetched it again and showed its skeleton
+        // again, and its scroll position was gone.
+        //
+        // A plain set, not state: it changes only when `tab` does, and that change
+        // is already what recomposes this.
+        val opened = remember { LinkedHashSet<HomeTab>() }
+        opened.remove(tab)
+        opened.add(tab)
+        while (opened.size > TAB_LIMIT) opened.remove(opened.first())
+        val kept = HomeTab.entries.filter { it in opened }
+
         Box(Modifier.weight(1f)) {
-            when (tab) {
+            for (t in kept) key(t) {
+                val shown = t == tab
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .shownOnlyIf(shown)
+                ) {
+                    CompositionLocalProvider(LocalBarsOwner provides shown) {
+            when (t) {
                 HomeTab.Chats -> ChatsScreen(
                     onOpenChat = onOpenChat,
                     onNewMessage = onNewMessage,
@@ -1174,6 +1286,9 @@ private fun HomeShell(
                     onPrivacy = onPrivacy,
                     onNotifications = onNotifications
                 )
+            }
+                    }
+                }
             }
         }
         IqBottomBar(

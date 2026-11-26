@@ -58,6 +58,22 @@ interface ChatDao {
     )
     fun threadTail(conversationId: String, limit: Int): Flow<List<MessageRow>>
 
+    /**
+     * How many messages [threadTail] would read to reach back as far as the one at
+     * [createdAt] / [seq], counting that one.
+     *
+     * Ordered and filtered exactly as the tail is, so the number is a window size:
+     * open the tail this wide and the message is its oldest row.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM messages
+        WHERE conversationId = :conversationId AND deletedAt = 0
+          AND (createdAt > :createdAt OR (createdAt = :createdAt AND seq >= :seq))
+        """
+    )
+    suspend fun countFrom(conversationId: String, createdAt: Long, seq: Int): Int
+
     @Query("SELECT * FROM messages WHERE clientId = :clientId LIMIT 1")
     suspend fun message(clientId: String): MessageRow?
 

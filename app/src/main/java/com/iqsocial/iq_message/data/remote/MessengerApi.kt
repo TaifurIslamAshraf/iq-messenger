@@ -167,6 +167,46 @@ data class MessengerProfile(
     /** Presence is only shown when the user has not switched it off. */
     val isOnline: Boolean get() = showActiveStatus && chatStatus.equals("online", true)
 
+    /**
+     * Back into the shape [from] reads, for keeping on disk.
+     *
+     * Needed because the profile on screen is not always one the server sent
+     * whole: a write answers with half of it and [with] folds that in. What is
+     * stored is what is shown.
+     */
+    fun toJson(): JSONObject = JSONObject()
+        .put("uid", uid)
+        .put("fullname", fullname)
+        .put("phone_number", phoneNumber)
+        .put("bio", bio)
+        .put("profile_picture", profilePicture)
+        .put("cover_picture", coverPicture)
+        .put("birthday", birthday)
+        .put("gender", gender)
+        .put("country", country)
+        .put("location", location)
+        .put(
+            "privacy_settings",
+            JSONObject()
+                .put("who_can_message", whoCanMessage)
+                .put("who_can_call", whoCanCall)
+        )
+        .put(
+            "name_change",
+            JSONObject()
+                .put("can_change", nameCanChange)
+                .put("next_change_at", nameNextChangeAt)
+        )
+        .put("verified", verified)
+        .put("badge_key", badgeKey)
+        .put("chat_status", chatStatus)
+        .put("chat_last_seen", chatLastSeen)
+        .put("show_active_status", showActiveStatus)
+        .put("allow_screenshot", allowScreenshot)
+        .put("followers", followers)
+        .put("following", following)
+        .put("total_post", totalPost)
+
     companion object {
         fun from(json: JSONObject): MessengerProfile {
             // `Me` is the `Profile` schema plus the account's own facts, so the

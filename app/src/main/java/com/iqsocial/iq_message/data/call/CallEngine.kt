@@ -73,6 +73,15 @@ object CallEngine {
      */
     val speakerOn: Boolean get() = CallAudio.route == CallAudio.Route.SPEAKER
 
+    /**
+     * True while this phone is sending its screen.
+     *
+     * Its own track, beside the camera rather than instead of it: the other end
+     * sees the screen big, and this end's self-view goes on showing the camera.
+     */
+    var screenSharing by mutableStateOf(false)
+        private set
+
     /** Your own camera, for the small preview. Null until it is on. */
     var localVideo by mutableStateOf<VideoTrack?>(null)
         private set
@@ -336,6 +345,77 @@ object CallEngine {
         }
     }
 
+    /**
+     * A voice call becomes a video call: the camera goes on, and the sound moves to
+     * the loudspeaker, since a phone being looked at is not at anybody's ear.
+     *
+     * The call object keeps its type - that is the server's word - and the screen
+     * follows the picture, as it already does when a camera is turned on mid-call.
+     */
+    fun switchToVideo() {
+        val r = room ?: return
+        toSpeakerIfAtEar()
+        if (cameraOn) return
+        scope.launch {
+            if (enableCamera(r)) {
+                cameraOn = true
+                refresh(r)
+            }
+        }
+    }
+
+    /**
+     * Starts sending the screen, with the consent the system dialog handed back.
+     *
+     * The SDK does the rest: it starts its own foreground service of type
+     * `mediaProjection` - which Android 14 requires before a projection may be
+     * made - and publishes the screen as a second video track.
+     */
+    fun startScreenShare(permission: android.content.Intent) {
+        val r = room ?: return
+        if (screenSharing) return
+        toSpeakerIfAtEar()
+        scope.launch {
+            val ok = runCatching {
+                r.localParticipant.setScreenShareEnabled(
+                    true,
+                    io.livekit.android.room.track.screencapture.ScreenCaptureParams(
+                        mediaProjectionPermissionResultData = permission,
+                        // Stopped from outside - the system's own "stop sharing",
+                        // or the projection being revoked - and not by the button.
+                        onStop = {
+                            scope.launch {
+                                screenSharing = false
+                                if (room === r) refresh(r)
+                            }
+                        }
+                    )
+                )
+            }.onFailure {
+                android.util.Log.w("CallEngine", "Could not share the screen", it)
+            }.getOrDefault(false)
+            screenSharing = ok
+            refresh(r)
+        }
+    }
+
+    fun stopScreenShare() {
+        val r = room ?: return
+        scope.launch {
+            runCatching { r.localParticipant.setScreenShareEnabled(false) }
+            screenSharing = false
+            refresh(r)
+        }
+    }
+
+    /** The earpiece is for a phone held to the head; anything looked at is not. */
+    private fun toSpeakerIfAtEar() {
+        val context = appContext ?: return
+        if (CallAudio.route == CallAudio.Route.EARPIECE) {
+            CallAudio.apply(context, CallAudio.Route.SPEAKER)
+        }
+    }
+
     /** Front to back and back again. */
     fun flipCamera() {
         val r = room ?: return
@@ -440,6 +520,7 @@ object CallEngine {
         poorConnection = false
         micOn = false
         cameraOn = false
+        screenSharing = false
         localVideo = null
         remoteFeeds = emptyList()
         speaking = emptySet()
@@ -593,20 +674,36 @@ object CallEngine {
         // Falls back to the warm track, which is the same camera before it has been
         // published. Without that, any room event arriving in the gap between
         // opening the camera and publishing it would blank the self-view.
-        localVideo = r.localParticipant.videoTrackPublications
-            .firstOrNull { it.second is VideoTrack }
-            ?.second as? VideoTrack
+        //
+        // The camera by name: once the screen is being shared there are two video
+        // tracks, and the self-view is the face, not a picture of this phone's own
+        // screen inside itself.
+        val mine = r.localParticipant.videoTrackPublications
+        localVideo = (
+            mine.firstOrNull {
+                it.first.source == io.livekit.android.room.track.Track.Source.CAMERA &&
+                    it.second is VideoTrack
+            } ?: mine.firstOrNull {
+                it.first.source != io.livekit.android.room.track.Track.Source.SCREEN_SHARE &&
+                    it.second is VideoTrack
+            }
+            )?.second as? VideoTrack
             ?: warmCamera
 
         remoteFeeds = r.remoteParticipants.values.map { p: Participant ->
+            // Their screen before their face. Somebody sharing it is showing it, and
+            // it is the thing being talked about.
+            val tracks = p.videoTrackPublications.filter { it.second is VideoTrack }
+            val shared = tracks.firstOrNull {
+                it.first.source == io.livekit.android.room.track.Track.Source.SCREEN_SHARE
+            }
             RemoteFeed(
                 // LiveKit's identity is the account uid, which is what ties a feed
                 // to the person the call object already describes.
                 uid = p.identity?.value.orEmpty(),
                 name = p.name.orEmpty(),
-                video = p.videoTrackPublications
-                    .mapNotNull { it.second as? VideoTrack }
-                    .firstOrNull()
+                video = (shared ?: tracks.firstOrNull())?.second as? VideoTrack,
+                screen = shared != null
             )
         }
     }
@@ -617,7 +714,9 @@ object CallEngine {
         val uid: String,
         val name: String,
         /** Null while their camera is off, which is not the same as them being gone. */
-        val video: VideoTrack?
+        val video: VideoTrack?,
+        /** [video] is their screen, which is shown whole rather than cropped to fill. */
+        val screen: Boolean = false
     )
 
     /** Called once at start-up, so routing can be set without a context to hand. */

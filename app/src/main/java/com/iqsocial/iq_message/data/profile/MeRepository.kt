@@ -66,6 +66,9 @@ object MeRepository {
         private set
 
     suspend fun load(token: String?) {
+        // The copy on this phone first, so the screen has a name and a face at once
+        // - and keeps them when the request below fails for want of a network.
+        restore()
         if (token.isNullOrBlank()) {
             loaded = true
             return
@@ -74,10 +77,32 @@ object MeRepository {
             is ApiResult.Success -> {
                 profile = result.data
                 error = null
+                keep()
             }
-            is ApiResult.Failure -> error = result.message
+            // Not said over a stored profile: offline, the page has everything it
+            // needs, and a red line under it would only report the weather.
+            is ApiResult.Failure -> if (profile == null) error = result.message
         }
         loaded = true
+    }
+
+    /**
+     * The profile as it was last seen, read off this phone.
+     *
+     * Only when nothing newer is held: a profile already in memory came from the
+     * server since, or from a write, and is the better of the two.
+     */
+    suspend fun restore() {
+        if (profile != null) return
+        val stored = ProfileCache.read(ProfileCache.ME) ?: return
+        val parsed = runCatching { MessengerProfile.from(stored) }.getOrNull() ?: return
+        if (profile == null && parsed.uid.isNotBlank()) profile = parsed
+    }
+
+    /** What is on screen, written down for next time. */
+    private fun keep() {
+        val now = profile ?: return
+        work.launch { ProfileCache.write(ProfileCache.ME, now.toJson()) }
     }
 
     /**
@@ -265,6 +290,9 @@ object MeRepository {
         write(token) { ProfileApi.removeImage(it, kind) }
 
     fun clear() {
+        // Every stored profile, the account's own and the people it looked at:
+        // the next person to sign in on this phone sees none of them.
+        ProfileCache.wipe()
         profile = null
         loaded = false
         error = null
@@ -316,6 +344,7 @@ object MeRepository {
      */
     private fun apply(fields: ProfileFields) {
         profile = profile?.with(fields)
+        keep()
     }
 
     private const val TAG = "MeRepository"

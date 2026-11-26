@@ -120,6 +120,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filter
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
@@ -198,6 +199,8 @@ import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import com.iqsocial.iq_message.data.chat.ThreadJump
 import kotlinx.coroutines.launch
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -214,6 +217,21 @@ fun ChatScreen(
      * the whole app did until this screen existed.
      */
     onOpenProfile: ((String) -> Unit)? = null,
+    /**
+     * Opens searching this conversation as a screen of its own, given the other
+     * person's name for its heading.
+     *
+     * Null where there is no navigation stack - the floating panel and the system
+     * bubble - and there the sheet is used, as with [onOpenProfile]. A result picked
+     * on that screen comes back through [ThreadJump].
+     */
+    onOpenSearch: ((String) -> Unit)? = null,
+    /**
+     * Opens the conversation's shared media as a screen of its own, given the other
+     * person's name for its heading. Null where there is no navigation stack, and
+     * there the sheet is used. A pick comes back through [ThreadJump].
+     */
+    onOpenShared: ((String) -> Unit)? = null,
     /**
      * True when this thread is being drawn inside the floating panel.
      *
@@ -905,6 +923,71 @@ fun ChatScreen(
     }
 
     /**
+     * Takes the thread to a message found by search, however far back it is.
+     *
+     * [jumpTo] only reaches what is loaded, and the thread opens on its newest
+     * page - while search finds things from any time. So the way back is made
+     * first: the history from the oldest page held down to the message is fetched
+     * a page at a time and stored, exactly as scrolling up would have done; the
+     * message itself is stored too, so it is there even if that walk stops short;
+     * and the thread's window is opened just wide enough to include it, with a few
+     * messages above it so it does not land on the top edge with no context.
+     *
+     * Bounded at [REACH_PAGES] pages. A message from years of conversation ago is
+     * not worth a minute of fetching before anything happens; past that, the
+     * message is still shown, just without everything between it and today.
+     */
+    suspend fun reach(picked: ChatMessage) {
+        val target = if (picked.conversationId.isBlank()) {
+            picked.copy(conversationId = conversationId)
+        } else {
+            picked
+        }
+        val auth = token
+        if (auth != null && target.seq > 0) {
+            for (attempt in 0 until REACH_PAGES) {
+                val oldest = ChatMessages.lowestSeq(context, conversationId)
+                if (oldest <= 0 || oldest <= target.seq) break
+                val page = MessagesApi.history(
+                    token = auth,
+                    conversationId = conversationId,
+                    beforeSeq = oldest
+                )
+                if (page !is ApiResult.Success) break
+                ChatMessages.store(context, page.data.items)
+                if (page.data.items.none { it.seq in 1 until oldest }) {
+                    reachedBeginning = true
+                    break
+                }
+            }
+        }
+        ChatMessages.storeIfMissing(context, target)
+
+        val needed = ChatMessages.windowFor(context, target)
+        if (needed + JUMP_CONTEXT > window) window = needed + JUMP_CONTEXT
+
+        // The window has been asked for; the thread follows a moment later, once
+        // the store answers. Waited for, briefly - and a jump that cannot find its
+        // message after that simply does not happen, rather than landing elsewhere.
+        withTimeoutOrNull(REACH_WAIT_MS) {
+            snapshotFlow { messages.any { it.id == target.id } }.first { it }
+        }
+        jumpTo(target.id)
+    }
+
+    // A message picked on the search or shared-media screen, for this chat.
+    //
+    // Watched rather than keyed on. Taking the request clears it, and an effect
+    // keyed on it restarts on that change - cancelling the reach it had only just
+    // begun, so the history was never fetched and the thread never moved.
+    LaunchedEffect(conversationId) {
+        snapshotFlow { ThreadJump.pending }.collect {
+            val target = ThreadJump.take(conversationId) ?: return@collect
+            reach(target)
+        }
+    }
+
+    /**
      * Puts the keyboard away for good, not just out of sight.
      *
      * Clearing focus as well as hiding is what makes it stick. A field that still
@@ -1267,8 +1350,14 @@ fun ChatScreen(
                 onBack = onBack,
                 onAudioCall = { onAudioCall(person.id) },
                 onVideoCall = { onVideoCall(person.id) },
-                onSearch = { searchOpen = true },
-                onShared = { sharedOpen = true },
+                onSearch = {
+                    val open = onOpenSearch
+                    if (open != null) open(person.name) else searchOpen = true
+                },
+                onShared = {
+                    val open = onOpenShared
+                    if (open != null) open(person.name) else sharedOpen = true
+                },
                 // The face and the name open the person; the overflow menu keeps
                 // the conversation's own actions. Pressing somebody's face is a
                 // question about them, not about the chat.
@@ -1678,7 +1767,9 @@ fun ChatScreen(
             conversationId = conversationId,
             // The thread already knows how to find a message and mark it; sharing
             // that is better than a second way of looking at the same picture.
-            onOpen = { id -> jumpTo(id) },
+            // Reached rather than jumped to: a shared photo can be from long
+            // before what the thread has loaded.
+            onOpen = { m -> scope.launch { reach(m) } },
             onDismiss = { sharedOpen = false }
         )
     }
@@ -1704,8 +1795,24 @@ fun ChatScreen(
             token = token,
             onAudioCall = { onAudioCall(person.id) },
             onVideoCall = { onVideoCall(person.id) },
-            onSearch = { searchOpen = true },
-            onShared = { sharedOpen = true },
+            onSearch = {
+                val open = onOpenSearch
+                if (open != null) {
+                    peerOpen = false
+                    open(person.name)
+                } else {
+                    searchOpen = true
+                }
+            },
+            onShared = {
+                val open = onOpenShared
+                if (open != null) {
+                    peerOpen = false
+                    open(person.name)
+                } else {
+                    sharedOpen = true
+                }
+            },
             onDismiss = { peerOpen = false }
         )
     }
@@ -2829,6 +2936,15 @@ private const val ENTER_RISE_PX = 28f
 
 /** Long enough to find the marked message, short enough not to linger. */
 private const val HIGHLIGHT_MS = 1600L
+
+/** Pages of history fetched, at most, to reach a message picked from search. */
+private const val REACH_PAGES = 20
+
+/** Messages kept above a reached one, so it does not sit on the top edge. */
+private const val JUMP_CONTEXT = 6
+
+/** How long a reach waits for the thread to include its message. */
+private const val REACH_WAIT_MS = 3_000L
 
 /**
  * Where each message sits in a run.

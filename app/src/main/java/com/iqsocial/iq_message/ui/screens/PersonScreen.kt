@@ -101,10 +101,16 @@ fun PersonScreen(
     var failed by remember(uid) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uid, token) {
-        val auth = token ?: return@LaunchedEffect
         if (uid.isBlank()) return@LaunchedEffect
+        // The copy kept from last time, drawn at once and kept when offline; the
+        // request below replaces it with whatever is true now.
+        if (profile == null) PeopleApi.cachedProfile(uid)?.let { profile = it }
+        val auth = token ?: return@LaunchedEffect
         when (val result = PeopleApi.profile(auth, uid)) {
-            is ApiResult.Success -> profile = result.data
+            is ApiResult.Success -> {
+                profile = result.data
+                failed = null
+            }
             is ApiResult.Failure -> failed = result.message
         }
     }

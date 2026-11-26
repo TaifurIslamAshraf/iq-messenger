@@ -1,6 +1,17 @@
 package com.iqsocial.iq_message.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.runtime.mutableStateMapOf
+import com.iqsocial.iq_message.data.remote.MessagePage
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.ui.platform.LocalContext
+import com.iqsocial.iq_message.data.auth.SessionStore
+import com.iqsocial.iq_message.ui.components.CircleIconButton
+import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.theme.Hairline
+import com.iqsocial.iq_message.ui.theme.SystemBarIcons
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -343,66 +354,22 @@ fun InConversationSearch(token: String?, conversationId: String, onDismiss: () -
 }
 
 /**
- * Media, documents and links shared in a conversation.
+ * Media, documents and links shared in a conversation, as a sheet.
  *
- * A bottom sheet, because it is a list that can be long and is read by scrolling -
- * a dialog floats a fixed box in the middle of the screen and gives the list a
- * fraction of it. The sheet comes up from the edge the thumb is already at and can
- * be dragged to full height.
- *
- * Three things here were quietly broken, and all three looked the same from the
- * outside - a sheet that did nothing:
- *
- * - **A failed request read as an empty conversation.** The error was mapped to an
- *   empty list, so a server that was refusing and a chat with nothing in it were
- *   drawn identically, as "Nothing shared yet".
- * - **Loading read as empty too**, because nothing was drawn between opening the
- *   sheet and the reply arriving.
- * - **The rows did nothing when tapped.** A list of things you cannot open is a
- *   list that does not work, whatever it says on it.
+ * Kept for the places with no navigation stack - the floating panel and the system
+ * bubble. Everywhere else the chat opens [SharedMediaScreen] instead; both draw the
+ * same [SharedBrowser].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SharedItems(
     token: String?,
     conversationId: String,
-    onOpen: (String) -> Unit,
+    onOpen: (ChatMessage) -> Unit,
     onDismiss: () -> Unit
 ) {
     val d = IqTheme.dimens
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var kind by remember(conversationId) { mutableStateOf(MessagesApi.Shared.MEDIA) }
-    var items by remember(conversationId) { mutableStateOf<List<ChatMessage>>(emptyList()) }
-    var loading by remember(conversationId) { mutableStateOf(true) }
-    var failure by remember(conversationId) { mutableStateOf<String?>(null) }
-    // Bumped by "Try again". A counter rather than re-setting `kind`, because two
-    // writes to the same state in one frame coalesce to the last one - setting it
-    // away and back lands on the value it started at, and the effect never re-runs.
-    var attempt by remember(conversationId) { mutableIntStateOf(0) }
-
-    // Keyed on the conversation as well: the sheet is remembered per chat, and
-    // without it a sheet reopened in another chat would show the first one's list.
-    LaunchedEffect(kind, token, conversationId, attempt) {
-        loading = true
-        failure = null
-        if (token.isNullOrBlank()) {
-            failure = "Not signed in"
-            loading = false
-            return@LaunchedEffect
-        }
-        when (val r = MessagesApi.shared(token, conversationId, kind)) {
-            is ApiResult.Success -> items = r.data.items
-            // Said, not swallowed. An empty list here is the server's answer to a
-            // question it refused to answer, and drawing it as "nothing shared"
-            // blames the conversation for the network.
-            is ApiResult.Failure -> {
-                items = emptyList()
-                failure = r.message
-            }
-        }
-        loading = false
-    }
-
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -423,214 +390,363 @@ fun SharedItems(
                 color = Ink,
                 modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
             )
+            SharedBrowser(
+                token = token,
+                conversationId = conversationId,
+                onPick = { m ->
+                    onDismiss()
+                    onOpen(m)
+                }
+            )
+        }
+    }
+}
 
-            Row(
+/**
+ * Media, documents and links shared in a conversation, on a screen of its own.
+ *
+ * Opened from the chat's menu or the person's sheet. Picking anything goes back to
+ * the chat and takes the thread to the message it was sent in - however far back,
+ * through [com.iqsocial.iq_message.data.chat.ThreadJump] - which is what a list of
+ * shared things is for: finding what somebody sent and the talk around it.
+ */
+@Composable
+fun SharedMediaScreen(
+    conversationId: String,
+    /** The other person's name, for the heading. */
+    peerName: String,
+    onBack: () -> Unit,
+    onPick: (ChatMessage) -> Unit
+) {
+    SystemBarIcons(darkIcons = true)
+    val d = IqTheme.dimens
+    val context = LocalContext.current
+    val token = remember { SessionStore(context).token }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color.White)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = d.gapXs, end = d.gutter, top = d.gapXs, bottom = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircleIconButton(
+                icon = IqIcons.ArrowBack,
+                contentDescription = "Back",
+                onClick = onBack,
+                borderColor = Hairline
+            )
+            Spacer(Modifier.width(d.gapMd))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Shared media",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Ink,
+                    maxLines = 1
+                )
+                if (peerName.isNotBlank()) {
+                    Text(
+                        peerName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = InkMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+        SharedBrowser(
+            token = token,
+            conversationId = conversationId,
+            onPick = onPick,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * The tabs and the list behind both the sheet and the screen.
+ *
+ * Three things here were once quietly broken, and all three looked the same from
+ * the outside - a list that did nothing: a failed request read as an empty
+ * conversation, loading read as empty too, and the rows did nothing when tapped.
+ * So failure is said with a way to try again, loading is drawn as tiles, and every
+ * item opens its message.
+ *
+ * Paged by `before_seq`: further items load as the end of the list comes into view.
+ */
+@Composable
+private fun SharedBrowser(
+    token: String?,
+    conversationId: String,
+    onPick: (ChatMessage) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val d = IqTheme.dimens
+    var kind by remember(conversationId) { mutableStateOf(MessagesApi.Shared.MEDIA) }
+    // Each tab's list, kept once fetched: going back to a tab shows what it had
+    // rather than fetching it all again behind a skeleton.
+    val pages = remember(conversationId) { mutableStateMapOf<MessagesApi.Shared, MessagePage>() }
+    val failures = remember(conversationId) { mutableStateMapOf<MessagesApi.Shared, String>() }
+    var loadingMore by remember(conversationId) { mutableStateOf(false) }
+    // Bumped by "Try again". A counter rather than re-setting `kind`, because two
+    // writes to the same state in one frame coalesce to the last one.
+    var attempt by remember(conversationId) { mutableIntStateOf(0) }
+
+    val items = pages[kind]?.items.orEmpty()
+    val next = pages[kind]?.nextSeq
+    val failure = failures[kind]
+    val loading = pages[kind] == null && failure == null
+
+    LaunchedEffect(kind, token, conversationId, attempt) {
+        if (pages[kind] != null || failures[kind] != null) return@LaunchedEffect
+        val asked = kind
+        if (token.isNullOrBlank()) {
+            failures[asked] = "Not signed in"
+            return@LaunchedEffect
+        }
+        when (val r = MessagesApi.shared(token, conversationId, asked)) {
+            is ApiResult.Success -> pages[asked] = MessagePage(
+                r.data.items.filter { it.id.isNotBlank() }.distinctBy { it.id },
+                r.data.nextSeq
+            )
+            is ApiResult.Failure -> failures[asked] = r.message
+        }
+    }
+
+    // The next page, once the end of this one is in view. Tied to the tab it was
+    // asked for, so a page arriving after the tab changed is dropped.
+    suspend fun loadMore() {
+        val auth = token ?: return
+        val before = next ?: return
+        if (loadingMore) return
+        val asked = kind
+        loadingMore = true
+        val r = MessagesApi.shared(auth, conversationId, asked, beforeSeq = before)
+        val held = pages[asked]
+        if (r is ApiResult.Success && held != null) {
+            val seen = held.items.mapTo(HashSet()) { it.id }
+            pages[asked] = MessagePage(
+                held.items + r.data.items.filter { it.id.isNotBlank() && seen.add(it.id) },
+                // The same cursor back again would ask for ever.
+                r.data.nextSeq?.takeIf { it != before }
+            )
+        }
+        loadingMore = false
+    }
+
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.gutter)
+                .padding(bottom = d.gapSm),
+            horizontalArrangement = Arrangement.spacedBy(d.gapSm)
+        ) {
+            MessagesApi.Shared.entries.forEach { option ->
+                val on = option == kind
+                Text(
+                    option.value.replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (on) Crimson else InkMuted,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .background(if (on) CrimsonTint else Color.Transparent)
+                        .clickable { kind = option }
+                        .padding(horizontal = d.gapMd, vertical = d.gapXs)
+                )
+            }
+        }
+        HairlineDivider()
+
+        when {
+            loading -> GridSkeleton()
+
+            failure != null -> Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = d.gutter)
-                    .padding(bottom = d.gapSm),
-                horizontalArrangement = Arrangement.spacedBy(d.gapSm)
+                    .padding(d.gutter),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                MessagesApi.Shared.entries.forEach { option ->
-                    val on = option == kind
-                    Text(
-                        option.value.replaceFirstChar { it.uppercase() },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (on) Crimson else InkMuted,
-                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(d.radiusSm))
-                            .background(if (on) CrimsonTint else Color.Transparent)
-                            .clickable { kind = option }
-                            .padding(horizontal = d.gapMd, vertical = d.gapXs)
-                    )
-                }
+                Text(
+                    failure.orEmpty(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Crimson,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(d.gapSm))
+                Text(
+                    "Try again",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Crimson,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .clickable {
+                            failures.remove(kind)
+                            attempt++
+                        }
+                        .padding(horizontal = d.gapMd, vertical = d.gapXs)
+                )
             }
-            HairlineDivider()
 
-            when {
-                // Tiles, because this tab is a grid of pictures whichever
-                // kind is chosen - and a grid that appears under a column of
-                // grey lines would move everything once it arrived.
-                loading -> GridSkeleton()
+            items.isEmpty() -> Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(d.gutter),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Nothing shared yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = InkMuted,
+                    textAlign = TextAlign.Center
+                )
+            }
 
-                failure != null -> Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(d.gutter),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        failure.orEmpty(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Crimson,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(d.gapSm))
-                    Text(
-                        "Try again",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Crimson,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(d.radiusSm))
-                            .clickable { attempt++ }
-                            .padding(horizontal = d.gapMd, vertical = d.gapXs)
-                    )
+            // Photos and videos are shown, not listed: a grid puts nine on screen
+            // where a list put four, and the thing looked for is the thing drawn.
+            // Documents and links keep their rows - there is nothing to show for them.
+            kind == MessagesApi.Shared.MEDIA -> LazyVerticalGrid(
+                columns = GridCells.Fixed(MEDIA_COLUMNS),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(d.gapXs),
+                horizontalArrangement = Arrangement.spacedBy(d.gapXs),
+                verticalArrangement = Arrangement.spacedBy(d.gapXs)
+            ) {
+                items(items, key = { it.id }) { m ->
+                    SharedTile(m, onClick = { onPick(m) })
                 }
-
-                items.isEmpty() -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(d.gutter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Nothing shared yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = InkMuted,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                // Photos and videos are shown, not listed.
-                //
-                // A row each gave every picture a thumbnail the size of an avatar
-                // and two lines of text beside it - a file name nobody chose and a
-                // date - so finding a photo meant reading about photos. A grid puts
-                // nine on screen where the list put four, and the thing being looked
-                // for is the thing being drawn.
-                //
-                // Documents and links keep their rows: there is nothing to show for
-                // them, and a grid of identical paper icons would be worse than the
-                // names.
-                kind == MessagesApi.Shared.MEDIA -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(MEDIA_COLUMNS),
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(d.gapXs),
-                    horizontalArrangement = Arrangement.spacedBy(d.gapXs),
-                    verticalArrangement = Arrangement.spacedBy(d.gapXs)
-                ) {
-                    items(items, key = { it.id }) { m ->
-                        val isVideo = (m.media?.kind ?: m.type) == "video"
-                        Box(
-                            Modifier
-                                // Square cells, whatever shape the picture is. A grid
-                                // of varying heights is a grid with holes in it, and
-                                // the preview is for recognising the photo rather
-                                // than judging its framing.
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(d.radiusSm))
-                                .background(CrimsonTint)
-                                .clickable {
-                                    onDismiss()
-                                    onOpen(m.id)
-                                }
-                        ) {
-                            MediaThumb(
-                                m.id,
-                                size = GRID_CELL,
-                                video = isVideo,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            if (isVideo) {
-                                // A still frame from a video looks exactly like a
-                                // photo, so the mark is the only thing that says
-                                // which it is - and the length says how much of one.
-                                Box(
-                                    Modifier
-                                        .align(Alignment.Center)
-                                        .size(d.scaled(28))
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.45f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        IqIcons.PlayArrow,
-                                        "Video",
-                                        Modifier.size(d.iconSm),
-                                        tint = Color.White
-                                    )
-                                }
-                                clockOf(m)?.let { length ->
-                                    Text(
-                                        length,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.White,
-                                        maxLines = 1,
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .padding(d.gapXs)
-                                            .clip(RoundedCornerShape(d.radiusSm))
-                                            .background(Color.Black.copy(alpha = 0.55f))
-                                            .padding(horizontal = d.gapXs)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                else -> LazyColumn(Modifier.fillMaxWidth()) {
-                    items(items, key = { it.id }) { m ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                // Tapping goes to the message where it was sent,
-                                // which is the thing a list of shared items is for:
-                                // finding what somebody sent and the talk around it.
-                                .clickable {
-                                    onDismiss()
-                                    onOpen(m.id)
-                                }
-                                .heightIn(min = 56.dp)
-                                .padding(horizontal = d.gutter, vertical = d.gapSm),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // A photo shows itself. The mark is for the kinds that
-                            // have no picture to show - a voice note, a document -
-                            // where it says what the thing is; on an image it only
-                            // said that an image was there, which the row already
-                            // said in words.
-                            val shape = m.media?.kind
-                            if (shape == "image" || shape == "video") {
-                                MediaThumb(m.id, d.avatarMd, video = shape == "video")
-                            } else {
-                                Box(
-                                    Modifier
-                                        .size(d.avatarMd)
-                                        .clip(CircleShape)
-                                        .background(CrimsonTint),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        sharedIcon(m),
-                                        null,
-                                        Modifier.size(d.iconSm),
-                                        tint = Crimson
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.width(d.gapMd))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    sharedLabel(m),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = Ink,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    fullStamp(m.createdAt),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = InkMuted
-                                )
-                            }
-                        }
-                        HairlineDivider()
+                if (next != null) {
+                    item(key = "more", span = { GridItemSpan(maxLineSpan) }) {
+                        LaunchedEffect(items.size) { loadMore() }
+                        GridSkeleton(rows = 1)
                     }
                 }
             }
+
+            else -> LazyColumn(Modifier.fillMaxSize()) {
+                items(items, key = { it.id }) { m ->
+                    SharedRow(m, onClick = { onPick(m) })
+                    HairlineDivider()
+                }
+                if (next != null) {
+                    item(key = "more") {
+                        LaunchedEffect(items.size) { loadMore() }
+                        ListSkeleton(rows = 2, lines = 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A photo or video in the grid: square, whatever shape the picture is. */
+@Composable
+private fun SharedTile(m: ChatMessage, onClick: () -> Unit) {
+    val d = IqTheme.dimens
+    val isVideo = (m.media?.kind ?: m.type) == "video"
+    Box(
+        Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(d.radiusSm))
+            .background(CrimsonTint)
+            .clickable(onClick = onClick)
+    ) {
+        MediaThumb(
+            m.id,
+            size = GRID_CELL,
+            video = isVideo,
+            modifier = Modifier.fillMaxSize()
+        )
+        if (isVideo) {
+            // A still frame from a video looks exactly like a photo, so the mark is
+            // the only thing that says which it is - and the length says how much.
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(d.scaled(28))
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    IqIcons.PlayArrow,
+                    "Video",
+                    Modifier.size(d.iconSm),
+                    tint = Color.White
+                )
+            }
+            clockOf(m)?.let { length ->
+                Text(
+                    length,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(d.gapXs)
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = d.gapXs)
+                )
+            }
+        }
+    }
+}
+
+/** A document or a link: what it is, its name, and when it was sent. */
+@Composable
+private fun SharedRow(m: ChatMessage, onClick: () -> Unit) {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = d.gutter, vertical = d.gapSm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        val shape = m.media?.kind
+        if (shape == "image" || shape == "video") {
+            MediaThumb(m.id, d.avatarMd, video = shape == "video")
+        } else {
+            Box(
+                Modifier
+                    .size(d.avatarMd)
+                    .clip(CircleShape)
+                    .background(CrimsonTint),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    sharedIcon(m),
+                    null,
+                    Modifier.size(d.iconSm),
+                    tint = Crimson
+                )
+            }
+        }
+        Spacer(Modifier.width(d.gapMd))
+        Column(Modifier.weight(1f)) {
+            Text(
+                sharedLabel(m),
+                style = MaterialTheme.typography.titleSmall,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                fullStamp(m.createdAt),
+                style = MaterialTheme.typography.bodySmall,
+                color = InkMuted
+            )
         }
     }
 }

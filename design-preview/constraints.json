@@ -1,0 +1,13 @@
+{
+  "scope": "Polish one existing screen at a time. Show the result and wait for the user's approval before starting another screen.",
+  "preserve": [
+    "Existing elements, features, controls and their order and positions",
+    "Existing visibility rules and behavior",
+    "The current red brand colors"
+  ],
+  "allowed": [
+    "Visual polish without adding, removing, showing or hiding elements",
+    "Round icons and circular icon buttons"
+  ],
+  "messages": "Keep the original profile icon, title, search icon, camera icon, menu, Reels strip, conversation list, dividers and bottom navigation. Do not add a search input or subtitle. The user's latest reference selects the rounded rectangular New message button with its label and pencil icon, plus pale pink unread conversation cards. Keep the header icon buttons circular; do not turn the labeled New message action into an icon-only circle. Unread styling continues to follow actual unread state."
+}

@@ -79,6 +79,7 @@ import com.iqsocial.iq_message.ui.components.HumpedBarShape
 import com.iqsocial.iq_message.ui.components.KeepScreenOn
 import com.iqsocial.iq_message.ui.components.avatarBrush
 import com.iqsocial.iq_message.ui.components.rememberCameraToggle
+import com.iqsocial.iq_message.ui.components.rememberScreenShareToggle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.CallBlack
 import com.iqsocial.iq_message.ui.theme.Crimson
@@ -110,6 +111,7 @@ fun VideoCallScreen(
     SecureScreen(!peerAllows)
     val profile = MeRepository.profile
     val toggleCamera = rememberCameraToggle()
+    val toggleShare = rememberScreenShareToggle()
 
     /** The two sliders, which are only up while somebody is using them. */
     var looks by remember { mutableStateOf(false) }
@@ -193,9 +195,12 @@ fun VideoCallScreen(
                         .padding(d.gapXs)
                 )
             } else {
+                // A shared screen is shown whole: cropped to fill, its edges -
+                // where a phone keeps its status bar and its buttons - are lost.
                 CallVideo(
                     track = CallEngine.remoteVideo,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    fill = feeds.firstOrNull()?.screen != true
                 )
             }
             // The scrim goes over whichever of the two is showing, so the controls
@@ -286,6 +291,27 @@ fun VideoCallScreen(
                             IqIcons.Sparkle, "Camera look",
                             Modifier.size(d.iconLg),
                             tint = if (lit) Color.Black else Color.White
+                        )
+                    }
+                    Spacer(Modifier.width(d.gapSm))
+                    // Filled while the screen is going out, the same as the look
+                    // button beside it: the state is readable without asking.
+                    val sharing = CallEngine.screenSharing
+                    Box(
+                        Modifier
+                            .size(d.iconButtonLg)
+                            .clip(CircleShape)
+                            .background(
+                                if (sharing) Color.White else Color.White.copy(alpha = 0.16f)
+                            )
+                            .clickable(onClick = toggleShare),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            IqIcons.ScreenShare,
+                            if (sharing) "Stop sharing screen" else "Share screen",
+                            Modifier.size(d.iconLg),
+                            tint = if (sharing) Color.Black else Color.White
                         )
                     }
                     Spacer(Modifier.width(d.gapMd))

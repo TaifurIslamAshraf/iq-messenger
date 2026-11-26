@@ -1,6 +1,7 @@
 package com.iqsocial.iq_message.data.remote
 
 import android.net.Uri
+import com.iqsocial.iq_message.data.profile.ProfileCache
 import androidx.compose.runtime.Immutable
 
 /**
@@ -91,12 +92,26 @@ object PeopleApi {
      * gives, and for the same reason: the absence of an answer should not say
      * which of those it was.
      */
-    suspend fun profile(token: String, uid: String): ApiResult<PublicProfile> =
-        ApiClient.get(
+    /**
+     * Their profile, and a copy kept on this phone for opening it offline - see
+     * [cachedProfile].
+     */
+    suspend fun profile(token: String, uid: String): ApiResult<PublicProfile> {
+        val result = ApiClient.get(
             "/v1/people/${Uri.encode(uid)}",
             token,
             MessengerConfig.BASE_URL
-        ).mapTo(PublicProfile::from)
+        )
+        if (result is ApiResult.Success) {
+            ProfileCache.write(ProfileCache.personKey(uid), result.data)
+        }
+        return result.mapTo(PublicProfile::from)
+    }
+
+    /** Their profile as it was last fetched on this phone, or null if it never was. */
+    suspend fun cachedProfile(uid: String): PublicProfile? =
+        ProfileCache.read(ProfileCache.personKey(uid))
+            ?.let { runCatching { PublicProfile.from(it) }.getOrNull() }
 
     suspend fun search(
         token: String,

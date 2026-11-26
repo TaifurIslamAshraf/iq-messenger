@@ -318,6 +318,16 @@ object IqIcons {
         }
     }
 
+    /** A screen with an arrow going up out of it: sending the screen. */
+    val ScreenShare = icon("ScreenShare") {
+        line {
+            roundRect(2.6f, 4.2f, 21.4f, 16.6f, 2.6f)
+            moveTo(8.5f, 20.2f); lineTo(15.5f, 20.2f)
+            moveTo(12f, 13.4f); lineTo(12f, 7.6f)
+            moveTo(9.4f, 10.1f); lineTo(12f, 7.5f); lineTo(14.6f, 10.1f)
+        }
+    }
+
     val VideocamOutline = icon("VideocamOutline") {
         line {
             roundRect(2.9f, 6.5f, 15.3f, 17.5f, 3.4f)
