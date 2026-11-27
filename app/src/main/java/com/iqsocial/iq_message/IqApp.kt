@@ -58,6 +58,7 @@ import com.iqsocial.iq_message.data.chat.OutboxWork
 import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.KnownPeople
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.media.MediaCache
 import com.iqsocial.iq_message.data.media.RemoteImage
 import com.iqsocial.iq_message.data.media.UploadQueue
@@ -461,6 +462,12 @@ fun IqApp(
      */
     LaunchedEffect(session.token) {
         if (!session.token.isNullOrBlank()) SettingsRepository.load(session.token)
+    }
+
+    // The people list at launch too, not only when a screen of people is opened:
+    // a chat with someone whose account has no name is titled from it.
+    LaunchedEffect(session.token) {
+        session.token?.takeIf { it.isNotBlank() }?.let { PeopleRepository.ensureLoaded(it) }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -885,6 +892,7 @@ fun IqApp(
                             CallCenter.clear()
                             auth.logout()
                             ContactsRepository.clear()
+                            PeopleRepository.clear()
                             MeRepository.clear()
                             // Settings belong to the account, not the install, so the
                             // next person to sign in on this phone must not inherit

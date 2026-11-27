@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.data.chat
 
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.remote.ChatPerson
 
 /**
@@ -44,14 +45,22 @@ object KnownPeople {
      * half to keep - it is current, where this is only remembered.
      */
     fun complete(conversationId: String, peer: ChatPerson?): ChatPerson? {
-        val known = of(conversationId) ?: return peer
-        peer ?: return known
-        return peer.copy(
-            uid = peer.uid.ifBlank { known.uid },
-            fullname = peer.fullname.ifBlank { known.fullname },
-            profilePicture = peer.profilePicture.ifBlank { known.profilePicture },
-            badgeKey = peer.badgeKey.ifBlank { known.badgeKey }
-        )
+        val known = of(conversationId)
+        val merged = when {
+            known == null -> peer
+            peer == null -> known
+            else -> peer.copy(
+                uid = peer.uid.ifBlank { known.uid },
+                fullname = peer.fullname.ifBlank { known.fullname },
+                profilePicture = peer.profilePicture.ifBlank { known.profilePicture },
+                badgeKey = peer.badgeKey.ifBlank { known.badgeKey }
+            )
+        } ?: return null
+        // Still nameless: an account with no name at all. If they are on the people
+        // list, that names them - by the number they were found by, at least.
+        if (merged.fullname.isNotBlank()) return merged
+        val listed = PeopleRepository.listedName(merged.uid) ?: return merged
+        return merged.copy(fullname = listed)
     }
 
     fun clear() {

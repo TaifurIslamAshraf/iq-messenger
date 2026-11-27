@@ -125,6 +125,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.BubbleGroup
 import com.iqsocial.iq_message.data.DeliveryStatus
 import com.iqsocial.iq_message.data.Message
@@ -323,7 +324,7 @@ fun ChatScreen(
      * on screen a tap earlier. The search put the person in [KnownPeople] as it
      * opened the chat, so there is an answer for exactly that gap.
      */
-    val peer = remember(remote) { KnownPeople.complete(conversationId, remote?.peer) }
+    val peer = remember(remote, PeopleRepository.people) { KnownPeople.complete(conversationId, remote?.peer) }
 
     /**
      * What this account may do here: answer a message request, or write at all.

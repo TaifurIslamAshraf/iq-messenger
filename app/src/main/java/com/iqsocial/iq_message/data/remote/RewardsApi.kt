@@ -82,6 +82,9 @@ data class RewardSlot(
  * against it the choice is locked, and a new pick lands tomorrow instead. The server
  * enforces that either way - this is so the screen can say so before the tap rather
  * than after.
+ *
+ * [lockedUntil] has more: a pick holds for two days, and until then the server
+ * refuses both a change and a clear.
  */
 @Immutable
 data class SpecialSlot(
@@ -92,7 +95,9 @@ data class SpecialSlot(
     val targetMs: Long,
     val points: Int,
     val completedAt: Long,
-    val canChangeToday: Boolean
+    val canChangeToday: Boolean,
+    /** Server time until which the pick can be neither changed nor cleared; 0 when it can. */
+    val lockedUntil: Long = 0L
 ) {
     companion object {
         fun from(json: JSONObject): SpecialSlot = SpecialSlot(
@@ -102,7 +107,8 @@ data class SpecialSlot(
             targetMs = json.optLong("target_ms"),
             points = json.optInt("points"),
             completedAt = json.optLong("completed_at"),
-            canChangeToday = json.optBoolean("can_change_today", true)
+            canChangeToday = json.optBoolean("can_change_today", true),
+            lockedUntil = json.optLong("locked_until")
         )
     }
 }

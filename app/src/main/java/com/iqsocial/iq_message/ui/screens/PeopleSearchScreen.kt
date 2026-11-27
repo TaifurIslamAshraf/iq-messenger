@@ -27,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,13 +45,14 @@ import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.chat.ChatRepository
 import com.iqsocial.iq_message.data.chat.KnownPeople
-import com.iqsocial.iq_message.data.contacts.DeviceContacts
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ChatPerson
 import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.components.rememberPeopleResults
+import com.iqsocial.iq_message.ui.components.shown
 import com.iqsocial.iq_message.ui.components.shimmer
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
@@ -63,14 +63,14 @@ import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.InkMuted
 import com.iqsocial.iq_message.ui.theme.IqTheme
 import com.iqsocial.iq_message.ui.theme.SystemBarIcons
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Find someone on IQ Social and open a conversation with them.
+ * Pick someone from your people and open a conversation with them.
  *
- * Below the server's two-character minimum it shows the people you follow rather
- * than an empty screen, so the page is useful before anything is typed.
+ * Your people are the one contact list - the phone book's people on IQ and whoever
+ * was added by QR code - and search looks only inside it, never at everyone on IQ
+ * Social. Below the two-character minimum it shows the whole list.
  */
 @Composable
 fun PeopleSearchScreen(
@@ -85,41 +85,13 @@ fun PeopleSearchScreen(
     val token = session.token
 
     var query by remember { mutableStateOf("") }
-    var result by remember { mutableStateOf<PeopleApi.SearchResult?>(null) }
-    var suggestions by remember { mutableStateOf<List<ChatPerson>>(emptyList()) }
-    var searching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableStateOf<String?>(null) }
 
     val trimmed = query.trim()
-    val isSearch = trimmed.length >= PeopleApi.MIN_QUERY
-
-    LaunchedEffect(token) {
-        if (token.isNullOrBlank()) return@LaunchedEffect
-        when (val r = PeopleApi.suggestions(token)) {
-            is ApiResult.Success -> suggestions = r.data.items
-            is ApiResult.Failure -> Unit   // suggestions are a nicety, not the point
-        }
-    }
-
-    LaunchedEffect(trimmed, token) {
-        if (token.isNullOrBlank() || !isSearch) {
-            result = null
-            searching = false
-            return@LaunchedEffect
-        }
-        searching = true
-        error = null
-        delay(300)                                   // let typing settle
-        when (val r = PeopleApi.search(token, trimmed, region = DeviceContacts.region(context))) {
-            is ApiResult.Success -> result = r.data
-            is ApiResult.Failure -> {
-                result = null
-                error = r.message
-            }
-        }
-        searching = false
-    }
+    val results = rememberPeopleResults(token, query)
+    val isSearch = results.isSearch
+    val searching = results.loading
 
     fun open(person: ChatPerson) {
         if (token.isNullOrBlank() || opening != null) return
@@ -147,7 +119,8 @@ fun PeopleSearchScreen(
         }
     }
 
-    val people = if (isSearch) result?.items.orEmpty() else suggestions
+    val people = results.people.map { it.shown() }
+    val shownError = error ?: results.error
 
     Column(
         Modifier
@@ -182,13 +155,13 @@ fun PeopleSearchScreen(
         SearchField(
             value = query,
             onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
-            placeholder = "Name or full phone number",
+            placeholder = "Search your people",
             modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
         )
 
-        if (error != null) {
+        if (shownError != null) {
             Text(
-                error!!,
+                shownError,
                 style = MaterialTheme.typography.bodyMedium,
                 color = Crimson,
                 modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapXs)
@@ -202,9 +175,8 @@ fun PeopleSearchScreen(
             item {
                 SectionLabel(
                     when {
-                        isSearch && result?.byPhone == true -> "Phone number match"
                         isSearch -> "Results"
-                        suggestions.isNotEmpty() -> "People you follow"
+                        people.isNotEmpty() -> "Your people"
                         else -> ""
                     }
                 )
@@ -226,8 +198,7 @@ fun PeopleSearchScreen(
                     SearchHint(
                         searching = searching,
                         isSearch = isSearch,
-                        typed = trimmed,
-                        hasSuggestions = suggestions.isNotEmpty()
+                        typed = trimmed
                     )
                 }
             }
@@ -298,15 +269,14 @@ private fun PersonRow(person: ChatPerson, busy: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * Explains an empty list, and in particular the two rules that surprise people:
- * the server matches **whole words**, and a phone number has to be complete.
+ * Explains an empty list: nobody on it matches, or there is nobody on it yet - and
+ * how people get there, since search can't reach anyone else.
  */
 @Composable
 private fun SearchHint(
     searching: Boolean,
     isSearch: Boolean,
-    typed: String,
-    hasSuggestions: Boolean
+    typed: String
 ) {
     val d = IqTheme.dimens
     Column(
@@ -334,19 +304,16 @@ private fun SearchHint(
         }
         Spacer(Modifier.height(d.gapXs))
         Text(
-            if (isSearch) "Nobody found" else "Search for someone",
+            if (isSearch) "Nobody found" else "No people yet",
             style = MaterialTheme.typography.titleLarge,
             color = Ink
         )
         Text(
-            when {
-                isSearch ->
-                    "No one on IQ Social matches \"$typed\". Names match whole words, " +
-                        "and a phone number has to be complete."
-                hasSuggestions -> "Or pick someone you follow."
-                else ->
-                    "Type a name, or a complete phone number, to find someone on " +
-                        "IQ Social."
+            if (isSearch) {
+                "Nobody on your list matches \"$typed\". Search looks only at your people: " +
+                    "your contacts on IQ Social and anyone you added by QR code."
+            } else {
+                "Sync your contacts, or scan someone's QR code, to add people to talk to."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = InkMuted,

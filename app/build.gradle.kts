@@ -186,7 +186,9 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.work.runtime)
     implementation(libs.zxing.core)
-    implementation(libs.play.services.code.scanner)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     testImplementation(libs.junit)
     // The JVM test classpath gets android.jar's org.json, whose methods all throw.
     testImplementation(libs.org.json)

@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.chat.ChatRepository
@@ -402,7 +403,7 @@ private fun ConversationActions(
                 .padding(vertical = d.gapMd)
         ) {
             Text(
-                conversation.peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown",
+                PeopleRepository.nameOf(conversation.peer),
                 style = MaterialTheme.typography.titleLarge,
                 color = Ink,
                 maxLines = 1,
@@ -490,10 +491,11 @@ internal fun ConversationRow(
     // Read here rather than passed in, so the dot lights up by itself when the
     // answer arrives: the repository is a snapshot map and this row is reading it.
     val presence = PresenceRepository.of(peer?.uid.orEmpty())
-    val person = remember(peer, presence?.online) {
+    val name = PeopleRepository.nameOf(peer)
+    val person = remember(peer, name, presence?.online) {
         Person(
             id = peer?.uid ?: conversation.id,
-            name = peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown",
+            name = name,
             handle = "",
             online = presence?.online == true,
             photo = peer?.profilePicture.orEmpty()
@@ -650,8 +652,8 @@ internal fun SearchHeading(text: String) {
 internal fun MessageHitRow(hit: MessageHit, query: String, onClick: () -> Unit) {
     val d = IqTheme.dimens
     val peer = hit.conversation?.peer
-    val name = peer?.fullname?.ifBlank { "Unknown" } ?: "Unknown"
-    val person = remember(peer) {
+    val name = PeopleRepository.nameOf(peer)
+    val person = remember(peer, name) {
         Person(
             id = peer?.uid ?: name,
             name = name,

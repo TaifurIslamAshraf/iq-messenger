@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.media.RemoteImage
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.data.remote.PublicProfile
@@ -120,6 +121,8 @@ fun PersonScreen(
 
     val name = profile?.fullname?.takeIf { it.isNotBlank() }
         ?: knownName.takeIf { it.isNotBlank() }
+        // An account with no name: what the people list calls them, if they are on it.
+        ?: PeopleRepository.listedName(uid)
         ?: "Profile"
     val photo = profile?.profilePicture?.takeIf { it.isNotBlank() } ?: knownPhoto
     val face = remember(uid, name, photo) {

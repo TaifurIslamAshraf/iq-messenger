@@ -185,7 +185,6 @@ data class MessengerProfile(
             "privacy_settings",
             JSONObject()
                 .put("who_can_message", whoCanMessage)
-                .put("who_can_call", whoCanCall)
         )
         .put(
             "name_change",
@@ -239,7 +238,7 @@ data class MessengerProfile(
 data class ContactSyncResult(
     val synced: Int,
     val invalid: Int,
-    val removed: Int,
+    /** Who of the numbers in that request is on IQ - not the whole list, which is `GET /v1/people`. */
     val matches: List<ContactMatch>
 )
 
@@ -260,11 +259,11 @@ object MessengerApi {
         }
 
     /**
-     * Replaces the stored address book with [phones] and returns the contacts who
-     * are on IQ Social.
+     * Adds [phones] to the stored address book and returns who of them is on IQ
+     * Social. The server puts those people on the account's people list.
      *
-     * This is a **full** sync by design: the spec is explicit that numbers not sent
-     * are removed, so this must always be the whole address book, never a delta.
+     * It only ever adds - numbers not sent are kept, not removed - so this can be
+     * the whole book or just the numbers that are new since the last time.
      *
      * Numbers go up exactly as they are saved on the device. The server normalises
      * them using [region], which is why a contact stored as `01712345678` resolves
@@ -306,7 +305,6 @@ object MessengerApi {
                     ContactSyncResult(
                         synced = result.data.optInt("synced"),
                         invalid = result.data.optInt("invalid"),
-                        removed = result.data.optInt("removed"),
                         matches = matches
                     ),
                     result.message

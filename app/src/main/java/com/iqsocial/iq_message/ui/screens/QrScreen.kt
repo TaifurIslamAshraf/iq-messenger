@@ -54,21 +54,18 @@ import com.iqsocial.iq_message.ui.components.shimmer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.iqsocial.iq_message.data.auth.SessionStore
-import com.iqsocial.iq_message.data.chat.ChatRepository
-import com.iqsocial.iq_message.data.chat.KnownPeople
 import com.iqsocial.iq_message.data.remote.ApiResult
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.remote.QrApi
 import com.iqsocial.iq_message.data.remote.QrCode
 import com.iqsocial.iq_message.ui.components.CircleIconButton
 import com.iqsocial.iq_message.ui.components.HairlineDivider
+import com.iqsocial.iq_message.ui.components.QrScanDialog
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.R
 import com.iqsocial.iq_message.ui.theme.CanvasGrey
@@ -112,6 +109,7 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
     var image by remember { mutableStateOf<ImageBitmap?>(null) }
 
     var busy by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var typed by remember { mutableStateOf("") }
 
@@ -138,14 +136,8 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
         busy = true
         note = null
         scope.launch {
-            when (val result = QrApi.scan(auth, code.trim())) {
+            when (val result = PeopleRepository.addByCode(auth, code)) {
                 is ApiResult.Success -> {
-                    // Both halves of the answer are worth keeping: the person, so
-                    // the chat has a name and a face before it fetches anything,
-                    // and the list, because a conversation that did not exist a
-                    // moment ago is now in it.
-                    KnownPeople.remember(result.data.conversation.id, result.data.person)
-                    ChatRepository.invalidate()
                     busy = false
                     onOpenChat(result.data.conversation.id)
                 }
@@ -156,6 +148,16 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
                 }
             }
         }
+    }
+
+    if (scanning) {
+        QrScanDialog(
+            onFound = { code ->
+                scanning = false
+                use(code)
+            },
+            onDismiss = { scanning = false }
+        )
     }
 
     Column(
@@ -298,7 +300,8 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
                 label = if (busy) "Opening…" else "Open the camera",
                 enabled = !busy
             ) {
-                scan(context, onFound = { use(it) }, onProblem = { note = it })
+                note = null
+                scanning = true
             }
 
             Spacer(Modifier.height(d.gapMd))
@@ -351,43 +354,6 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
                 )
             }
         }
-    }
-}
-
-/**
- * Opens Google's scanner and hands back what it read.
- *
- * Its own screen, its own camera, and no camera permission of this app's - which
- * is the whole reason for choosing it: asking for the camera in order to read ten
- * characters is a large thing to ask for a small errand, and a permission this app
- * holds is a permission it has to justify.
- *
- * The module downloads on first use, so a failure here is ordinary - a phone
- * without Play services, or with no room to fetch it - and the typed code below is
- * the way through that, which is why it is not hidden behind the camera.
- */
-private fun scan(
-    context: Context,
-    onFound: (String) -> Unit,
-    onProblem: (String) -> Unit
-) {
-    val options = GmsBarcodeScannerOptions.Builder()
-        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-        .enableAutoZoom()
-        .build()
-    runCatching {
-        GmsBarcodeScanning.getClient(context, options).startScan()
-            .addOnSuccessListener { found ->
-                val value = found.rawValue.orEmpty()
-                if (value.isBlank()) onProblem("That code could not be read.")
-                else onFound(value)
-            }
-            .addOnCanceledListener { }
-            .addOnFailureListener {
-                onProblem("The scanner could not start. Type the code instead.")
-            }
-    }.onFailure {
-        onProblem("The scanner could not start. Type the code instead.")
     }
 }
 

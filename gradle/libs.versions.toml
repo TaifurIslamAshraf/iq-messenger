@@ -20,7 +20,7 @@ ksp = "2.2.10-2.0.2"
 room = "2.8.5"
 work = "2.12.0"
 zxing = "3.5.3"
-codeScanner = "16.1.0"
+camera = "1.4.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -63,11 +63,14 @@ androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", ve
 # this in the QR image"; turning a string into that image is Reed-Solomon coding
 # and mask selection, which is a library's job and not a file in this app.
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
-# Reading one. Google's own scanner: it brings its own camera screen, needs no
-# camera permission of ours, and downloads its module on first use - against
-# CameraX plus a barcode analyser, which is a camera preview, a permission prompt
-# and a frame pipeline to maintain for the same ten characters.
-play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "codeScanner" }
+# Reading one: CameraX for the preview and the frames, ZXing (above) to find the
+# code in them. Google's code scanner was tried first, but it is a module Play
+# services downloads on first use, and where that download fails - no Google
+# account, no Play services - the scanner never opened. The camera permission is
+# already held for video calls.
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camera" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camera" }
 # Reels. ExoPlayer under its current name: HLS for Cloudflare Stream's manifests,
 # the cache for keeping what was downloaded, and the preload manager that loads the
 # next reels ahead of a swipe.

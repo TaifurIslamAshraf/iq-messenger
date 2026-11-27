@@ -1,6 +1,7 @@
 package com.iqsocial.iq_message.ui.components
 
 import android.Manifest
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -40,6 +41,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
 import com.iqsocial.iq_message.data.contacts.DeviceContacts
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.CrimsonTint
@@ -71,8 +73,7 @@ fun ContactsAccessGate() {
             // Already done this launch. Coming back to Home from a chat should not
             // re-read the address book, let alone upload it again.
             ContactsRepository.loaded -> Unit
-            DeviceContacts.isGranted(context) ->
-                ContactsRepository.refresh(context, session.token)
+            DeviceContacts.isGranted(context) -> syncContacts(context, session.token)
             !session.contactsPrompted -> showPopup = true
         }
     }
@@ -101,7 +102,7 @@ fun rememberContactsRequest(onResult: (Boolean) -> Unit = {}): () -> Unit {
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) scope.launch { ContactsRepository.refresh(context, session.token) }
+        if (granted) scope.launch { syncContacts(context, session.token) }
         onResult(granted)
     }
     return { launcher.launch(Manifest.permission.READ_CONTACTS) }
@@ -225,4 +226,13 @@ private fun ReassuranceRow(icon: ImageVector, text: String) {
             color = InkMuted
         )
     }
+}
+
+/**
+ * Sends the phone book's new numbers and, when that found someone on IQ, fetches the
+ * people list again so they show up everywhere people are offered.
+ */
+suspend fun syncContacts(context: Context, token: String?, everything: Boolean = false) {
+    val grew = ContactsRepository.refresh(context, token, everything)
+    if (grew && !token.isNullOrBlank()) PeopleRepository.refresh(token)
 }

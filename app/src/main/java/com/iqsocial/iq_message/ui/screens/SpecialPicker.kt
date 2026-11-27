@@ -22,29 +22,35 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
-import com.iqsocial.iq_message.data.Person
+import androidx.compose.ui.unit.dp
+import com.iqsocial.iq_message.data.people.PeopleRepository
 import com.iqsocial.iq_message.data.remote.ApiResult
-import com.iqsocial.iq_message.data.remote.ChatPerson
+import com.iqsocial.iq_message.ui.components.CircleIconButton
+import com.iqsocial.iq_message.ui.components.QrCodeEntryDialog
+import kotlinx.coroutines.launch
+import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.components.rememberPeopleResults
+import com.iqsocial.iq_message.ui.components.shown
 import com.iqsocial.iq_message.ui.components.SheetHandle
 import com.iqsocial.iq_message.ui.icons.IqIcons
 import com.iqsocial.iq_message.ui.theme.Crimson
 import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.InkMuted
 import com.iqsocial.iq_message.ui.theme.IqTheme
-import kotlinx.coroutines.delay
 
 /**
  * Choosing the one person the special reward slot is for.
@@ -67,33 +73,53 @@ fun SpecialPicker(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
     /** What the sheet is for, which is the only thing that differs between uses. */
-    title: String = "Special person"
+    title: String = "Special person",
+    /**
+     * Offers a QR scan at the top: someone not on the list yet is added by their
+     * code and picked in the same go. Only for the special person - the call picker
+     * calls people already here.
+     */
+    scanToPick: Boolean = false
 ) {
     val d = IqTheme.dimens
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by remember { mutableStateOf("") }
-    var people by remember { mutableStateOf<List<ChatPerson>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    // Only the account's own people: the server refuses anyone else as the special
+    // person, so offering them would only end in an error.
+    val results = rememberPeopleResults(token, query)
+    val people = results.people.map { it.shown() }
+    val loading = results.loading
+    val scope = rememberCoroutineScope()
+    var entering by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
+    var codeNote by remember { mutableStateOf<String?>(null) }
 
-    val searching = query.trim().length >= PeopleApi.MIN_QUERY
+    // The code goes to the server, which puts its owner on this account's people
+    // list; then they are picked like anyone already on it.
+    fun pickByCode(code: String) {
+        val auth = token ?: return
+        if (adding) return
+        adding = true
+        codeNote = null
+        scope.launch {
+            when (val r = PeopleRepository.addByCode(auth, code)) {
+                is ApiResult.Success -> {
+                    entering = false
+                    onPick(r.data.person.uid)
+                }
+                is ApiResult.Failure -> codeNote = r.message
+            }
+            adding = false
+        }
+    }
 
-    LaunchedEffect(query, token) {
-        if (token.isNullOrBlank()) {
-            loading = false
-            return@LaunchedEffect
-        }
-        loading = true
-        // A pause before searching, so typing a name is one request and not one a
-        // letter - the same wait the call sheet uses.
-        if (searching) delay(SEARCH_PAUSE_MS)
-        people = if (searching) {
-            PeopleApi.search(token, query.trim())
-                .let { if (it is ApiResult.Success) it.data.items else emptyList() }
-        } else {
-            PeopleApi.suggestions(token)
-                .let { if (it is ApiResult.Success) it.data.items else emptyList() }
-        }
-        loading = false
+    if (entering) {
+        QrCodeEntryDialog(
+            busy = adding,
+            note = codeNote,
+            onCode = ::pickByCode,
+            onDismiss = { entering = false }
+        )
     }
 
     ModalBottomSheet(
@@ -110,16 +136,47 @@ fun SpecialPicker(
         }
     ) {
         Column(Modifier.fillMaxHeight(0.9f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.headlineMedium,
-                color = Ink,
-                modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = d.gutter,
+                        end = if (scanToPick) d.gapXs else d.gutter,
+                        top = d.gapMd,
+                        bottom = d.gapMd
+                    ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Ink,
+                    modifier = Modifier.weight(1f)
+                )
+                if (scanToPick) {
+                    CircleIconButton(
+                        icon = IqIcons.QrCode,
+                        contentDescription = "Add by QR code",
+                        onClick = {
+                            codeNote = null
+                            entering = true
+                        },
+                        tint = Crimson
+                    )
+                }
+            }
+            if (scanToPick) {
+                Text(
+                    "Whoever you pick stays your special person for 2 days. Tap the QR icon to add someone new by their code.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = InkMuted,
+                    modifier = Modifier.padding(start = d.gutter, end = d.gutter, bottom = d.gapMd)
+                )
+            }
             SearchField(
                 value = query,
                 onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
-                placeholder = "Search people",
+                placeholder = "Search your people",
                 modifier = Modifier.padding(horizontal = d.gutter)
             )
 
@@ -177,9 +234,14 @@ fun SpecialPicker(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                if (searching) "Nobody by that name" else "Nobody to suggest yet",
+                                when {
+                                    results.error != null -> results.error
+                                    results.isSearch -> "Nobody on your list matches that"
+                                    else -> "Your people list is empty. Sync your contacts or add someone by QR code."
+                                },
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = InkMuted
+                                color = InkMuted,
+                                textAlign = TextAlign.Center
                             )
                         }
                     }
@@ -189,4 +251,3 @@ fun SpecialPicker(
     }
 }
 
-private const val SEARCH_PAUSE_MS = 300L

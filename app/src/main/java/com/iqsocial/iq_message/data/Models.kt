@@ -29,8 +29,10 @@ data class Person(
     val seed: Int = id.hashCode()
 ) {
     val initials: String
+        // Only words that start with a letter: someone shown by their number would
+        // otherwise get "+" for initials. With none, the avatar is the plain gradient.
         get() = name.trim().split(" ")
-            .filter { it.isNotBlank() }
+            .filter { it.firstOrNull()?.isLetter() == true }
             .take(2)
             .joinToString("") { it.first().uppercase() }
 }

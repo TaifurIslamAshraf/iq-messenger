@@ -10,8 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.iqsocial.iq_message.data.Person
+import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.remote.ApiResult
-import com.iqsocial.iq_message.data.remote.ContactMatch
 import com.iqsocial.iq_message.data.remote.ContactSyncResult
 import com.iqsocial.iq_message.data.remote.MessengerApi
 import kotlinx.coroutines.Dispatchers
@@ -110,6 +110,11 @@ object DeviceContacts {
  * Contacts are read once after sign-in and shared from here rather than re-queried
  * per screen — the provider call is slow enough to be worth doing once, and every
  * screen should see the same list.
+ *
+ * Who of them is on IQ is not kept here: the server adds them to the account's
+ * people list, and [PeopleRepository] is where every screen reads that. What stays
+ * here is the phone's own names, so the People tab can call someone what this phone
+ * calls them.
  */
 object ContactsRepository {
 
@@ -118,10 +123,6 @@ object ContactsRepository {
 
     /** True once a read has completed, even if it found nothing. */
     var loaded by mutableStateOf(false)
-        private set
-
-    /** Contacts who turned out to be on IQ Social, keyed by [numberKey]. */
-    var matches by mutableStateOf<Map<String, ContactMatch>>(emptyMap())
         private set
 
     /** Counts from the last successful sync, for anything that wants to show them. */
@@ -139,37 +140,58 @@ object ContactsRepository {
     var syncing by mutableStateOf(false)
         private set
 
+    /** The phone's names by [numberKey], rebuilt whenever [contacts] is. */
+    private var namesByNumber: Map<String, String> = emptyMap()
+
     /**
-     * Reads the address book and, when signed in, syncs it so the server can say
-     * which of those numbers already have accounts.
+     * Reads the address book and, when signed in, sends the server the numbers it
+     * has not had yet. Returns true when the server found someone on IQ among them,
+     * which is when the people list has grown.
+     *
+     * The server only ever adds - a number deleted from the phone stays, by the
+     * owner's decision - so a number sent once never needs sending again, and an
+     * ordinary launch uploads nothing unless the phone book gained a number.
+     * [everything] sends the whole book anyway: a pull-to-refresh, which is also how
+     * someone already in the book who joined IQ since is found.
      *
      * A failed sync is deliberately not fatal: the contacts have been read, and the
-     * People tab is useful without yet knowing who is on IQ Social.
+     * People tab is useful without them.
      */
-    suspend fun refresh(context: Context, token: String?) {
+    suspend fun refresh(context: Context, token: String?, everything: Boolean = false): Boolean {
         syncing = true
         try {
             contacts = DeviceContacts.read(context)
+            namesByNumber = contacts
+                .filter { it.name.isNotBlank() }
+                .associateBy({ numberKey(it.handle) }, { it.name })
             loaded = true
-            if (token.isNullOrBlank() || contacts.isEmpty()) return
+            if (token.isNullOrBlank() || contacts.isEmpty()) return false
+
+            val session = SessionStore(context)
+            val sent = session.sentContactNumbers
+            val toSend = contacts.map { it.handle }
+                .filter { everything || digitsOf(it) !in sent }
+                .distinct()
+            if (toSend.isEmpty()) return false
 
             val result = MessengerApi.syncContacts(
-                phones = contacts.map { it.handle },
+                phones = toSend,
                 region = DeviceContacts.region(context),
                 token = token
             )
-            if (result is ApiResult.Success) {
-                lastSync = result.data
-                matches = result.data.matches.associateBy { numberKey(it.phone) }
-            }
+            if (result !is ApiResult.Success) return false
+            lastSync = result.data
+            session.sentContactNumbers = sent + toSend.map(::digitsOf)
+            return result.data.matches.isNotEmpty()
         } finally {
-            // In a finally, because the early return above is a normal path out and
+            // In a finally, because the early returns above are normal paths out and
             // a flag left true would leave the spinner turning for good.
             syncing = false
         }
     }
 
-    fun matchFor(person: Person): ContactMatch? = matches[numberKey(person.handle)]
+    /** What this phone's address book calls the owner of [phone], if it has them. */
+    fun nameFor(phone: String?): String? = phone?.let { namesByNumber[numberKey(it)] }
 
     /**
      * Numbers come back from the server in E.164 but are stored on the device in
@@ -179,11 +201,14 @@ object ContactsRepository {
      */
     private fun numberKey(raw: String): String = raw.filter(Char::isDigit).takeLast(9)
 
+    /** How a sent number is remembered: every digit, so two numbers are never taken for one. */
+    private fun digitsOf(raw: String): String = raw.filter(Char::isDigit)
+
     /** The address book belongs to whoever is signed in, so it goes when they do. */
     fun clear() {
         contacts = emptyList()
+        namesByNumber = emptyMap()
         loaded = false
-        matches = emptyMap()
         lastSync = null
         syncing = false
     }

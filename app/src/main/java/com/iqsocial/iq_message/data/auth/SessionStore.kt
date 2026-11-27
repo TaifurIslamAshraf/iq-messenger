@@ -60,6 +60,19 @@ class SessionStore(context: Context) {
         }
 
     /**
+     * Phone-book numbers already sent to `/v1/contacts/sync`, as their digits.
+     *
+     * The server only ever adds numbers and never removes one, so a number sent once
+     * never needs sending again: each launch uploads only what is new in the phone
+     * book. Kept with the session, so the next account to sign in starts from none.
+     */
+    var sentContactNumbers: Set<String>
+        get() = prefs.getStringSet(KEY_SENT_CONTACTS, null)?.toSet().orEmpty()
+        set(value) {
+            prefs.edit().putStringSet(KEY_SENT_CONTACTS, value).apply()
+        }
+
+    /**
      * Whether the system notification prompt has been put up before.
      *
      * Android keeps no "have I asked?" of its own, and the difference matters: a
@@ -125,6 +138,7 @@ class SessionStore(context: Context) {
     private companion object {
         const val KEY_TOKEN = "token"
         const val KEY_CONTACTS = "contacts_prompted"
+        const val KEY_SENT_CONTACTS = "contacts_sent"
         const val KEY_NOTIFICATIONS = "notifications_prompted"
         const val KEY_FULL_SCREEN_CALLS = "full_screen_calls_prompted"
         const val KEY_CHAT_HEADS = "chat_heads_prompted"

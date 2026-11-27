@@ -153,6 +153,27 @@ fun RewardsScreen(
         }
     }
 
+    /**
+     * How long the special pick still holds, counted down here. Against `server_now`
+     * like the call timer, so a phone whose clock is off neither unlocks early - the
+     * server would refuse - nor late.
+     */
+    var lockLeftMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(state?.special?.lockedUntil, state?.serverNow) {
+        val until = state?.special?.lockedUntil ?: 0L
+        val serverNow = state?.serverNow ?: 0L
+        if (until <= 0L || serverNow <= 0L) {
+            lockLeftMs = 0L
+            return@LaunchedEffect
+        }
+        val drift = System.currentTimeMillis() - serverNow
+        while (true) {
+            lockLeftMs = (until - (System.currentTimeMillis() - drift)).coerceAtLeast(0L)
+            if (lockLeftMs == 0L) break
+            delay(1000)
+        }
+    }
+
     fun reload() {
         attempt++
     }
@@ -180,7 +201,12 @@ fun RewardsScreen(
                 }
                 reload()
             }
-            is ApiResult.Failure -> note = result.message
+            is ApiResult.Failure -> {
+                note = result.message
+                // Refused because the pick still holds, perhaps from another phone:
+                // fetching again brings its countdown.
+                reload()
+            }
         }
     }
 
@@ -223,6 +249,7 @@ fun RewardsScreen(
                         liveMs = liveMs,
                         livePeer = state.live?.peerUid,
                         busy = changing,
+                        lockLeftMs = lockLeftMs,
                         onPick = { picking = true },
                         onClear = {
                             val auth = token ?: return@SpecialCard
@@ -316,6 +343,7 @@ fun RewardsScreen(
         SpecialPicker(
             token = token,
             already = state?.special?.person?.uid,
+            scanToPick = true,
             onPick = { uid ->
                 picking = false
                 val auth = token ?: return@SpecialPicker
@@ -534,6 +562,8 @@ private fun SpecialCard(
     liveMs: Long,
     livePeer: String?,
     busy: Boolean,
+    /** How long the pick still holds; 0 once it can be changed. */
+    lockLeftMs: Long,
     onPick: () -> Unit,
     onClear: () -> Unit
 ) {
@@ -594,6 +624,12 @@ private fun SpecialCard(
         }
 
         Spacer(Modifier.height(d.gapMd))
+        if (who != null && lockLeftMs > 0L) {
+            // The server refuses a change or a clear until then, so the buttons go
+            // and the time left takes their place.
+            LockedFor(lockLeftMs)
+            return@Column
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(d.gapSm)) {
             Action(
                 label = if (who == null) "Pick someone" else "Change",
@@ -612,6 +648,51 @@ private fun SpecialCard(
                 )
             }
         }
+    }
+}
+
+/** In place of "Change" and "Clear" while the pick holds: how long until they come back. */
+@Composable
+private fun LockedFor(leftMs: Long) {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(d.buttonHeight)
+            .clip(RoundedCornerShape(d.radiusMd))
+            .background(Color.White)
+            .padding(horizontal = d.gapMd),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(IqIcons.Clock, null, Modifier.size(d.iconSm), tint = Crimson)
+        Spacer(Modifier.width(d.gapSm))
+        Text(
+            "Change or remove in",
+            style = MaterialTheme.typography.bodyLarge,
+            color = InkMuted,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            lockLeft(leftMs),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Crimson,
+            maxLines = 1
+        )
+    }
+}
+
+/** "1d 23h 59m" while a day or more is left, then "23h 59m 59s", then "59m 59s". */
+internal fun lockLeft(ms: Long): String {
+    val total = (ms + 999) / 1000
+    val days = total / 86_400
+    val hours = total % 86_400 / 3600
+    val minutes = total % 3600 / 60
+    val seconds = total % 60
+    return when {
+        days > 0 -> "${days}d ${hours}h ${minutes}m"
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        else -> "${minutes}m ${seconds}s"
     }
 }
 

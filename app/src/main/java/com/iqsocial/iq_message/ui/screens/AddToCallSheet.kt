@@ -26,7 +26,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +39,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
-import com.iqsocial.iq_message.data.remote.ApiResult
-import com.iqsocial.iq_message.data.remote.ChatPerson
 import com.iqsocial.iq_message.data.remote.PeopleApi
 import com.iqsocial.iq_message.ui.components.Avatar
 import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.components.rememberPeopleResults
+import com.iqsocial.iq_message.ui.components.shown
 import com.iqsocial.iq_message.ui.components.HairlineDivider
 import com.iqsocial.iq_message.ui.components.SheetHandle
 import com.iqsocial.iq_message.ui.icons.IqIcons
@@ -54,7 +53,6 @@ import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.InkFaint
 import com.iqsocial.iq_message.ui.theme.InkMuted
 import com.iqsocial.iq_message.ui.theme.IqTheme
-import kotlinx.coroutines.delay
 
 /**
  * Who to add to the call in progress.
@@ -79,31 +77,12 @@ fun AddToCallSheet(
     val d = IqTheme.dimens
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by remember { mutableStateOf("") }
-    var people by remember { mutableStateOf<List<ChatPerson>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
     var chosen by remember { mutableStateOf<Set<String>>(emptySet()) }
-
-    val searching = query.trim().length >= PeopleApi.MIN_QUERY
-
-    LaunchedEffect(query, token) {
-        if (token.isNullOrBlank()) {
-            loading = false
-            return@LaunchedEffect
-        }
-        loading = true
-        // A pause before searching, so typing a name is one request rather than one
-        // per letter.
-        if (searching) delay(SEARCH_PAUSE_MS)
-        val result = if (searching) {
-            PeopleApi.search(token, query.trim())
-                .let { if (it is ApiResult.Success) it.data.items else emptyList() }
-        } else {
-            PeopleApi.suggestions(token)
-                .let { if (it is ApiResult.Success) it.data.items else emptyList() }
-        }
-        people = result.filterNot { it.uid in exclude }
-        loading = false
-    }
+    // The account's own people, as everywhere else that offers someone.
+    val results = rememberPeopleResults(token, query)
+    val people = results.people.map { it.shown() }.filterNot { it.uid in exclude }
+    val loading = results.loading
+    val searching = results.isSearch
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -152,7 +131,7 @@ fun AddToCallSheet(
             SearchField(
                 value = query,
                 onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
-                placeholder = "Search people",
+                placeholder = "Search your people",
                 modifier = Modifier.padding(horizontal = d.gutter)
             )
             Spacer(Modifier.height(d.gapSm))
@@ -170,8 +149,8 @@ fun AddToCallSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        if (searching) "Nobody by that name."
-                        else "No one to suggest. Search by name or number.",
+                        if (searching) "Nobody on your list matches that."
+                        else "Your people list is empty. Sync your contacts or add someone by QR code.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = InkMuted,
                         textAlign = TextAlign.Center
@@ -233,6 +212,3 @@ fun AddToCallSheet(
         }
     }
 }
-
-/** Long enough that a typed name is one request, short enough not to feel slow. */
-private const val SEARCH_PAUSE_MS = 300L

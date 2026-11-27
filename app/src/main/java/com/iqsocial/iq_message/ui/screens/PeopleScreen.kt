@@ -45,6 +45,12 @@ import androidx.compose.ui.unit.dp
 import com.iqsocial.iq_message.data.Person
 import com.iqsocial.iq_message.data.auth.SessionStore
 import com.iqsocial.iq_message.data.contacts.ContactsRepository
+import com.iqsocial.iq_message.data.people.PeopleRepository
+import com.iqsocial.iq_message.data.remote.PeopleApi
+import com.iqsocial.iq_message.data.remote.SavedPerson
+import com.iqsocial.iq_message.ui.components.ListSkeleton
+import com.iqsocial.iq_message.ui.components.rememberPeopleResults
+import com.iqsocial.iq_message.data.people.shownName
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.ConversationsApi
 import com.iqsocial.iq_message.ui.components.Avatar
@@ -64,12 +70,13 @@ import kotlinx.coroutines.launch
  * Not one of the supplied mockups — built in the same visual language so the
  * People tab in the bottom bar leads somewhere real.
  *
- * Lists the contacts who are **on IQ Social** — the address book filtered down to
- * the numbers `/v1/contacts/sync` matched to an account. People you cannot message
- * do not belong on a messaging app's People tab.
+ * The account's people (`GET /v1/people`): everyone in the phone book who is on IQ
+ * Social, and anyone added by QR code. It is the same list "New message", the
+ * rewards picker and "Add to call" offer, and the search box searches only it.
+ * Accepting someone's message request does not put them here.
  *
- * Falls back to the sample set when contacts were skipped or the device has none,
- * so the tab is never empty in a demo.
+ * Someone saved in this phone's address book is shown under the name saved there,
+ * as a phone would; anyone else under their IQ Social name.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,54 +85,37 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
     val d = IqTheme.dimens
     var query by remember { mutableStateOf("") }
 
-    val deviceContacts = ContactsRepository.contacts
-    val matches = ContactsRepository.matches
-    val requestContacts = rememberContactsRequest()
-
-    // Only the contacts the server matched to an IQ account. This tab is for people
-    // you can actually message, so an address book full of numbers that are not on
-    // IQ Social is noise rather than content.
-    val onIq = remember(deviceContacts, matches) {
-        deviceContacts.mapNotNull { contact ->
-            val match = ContactsRepository.matchFor(contact) ?: return@mapNotNull null
-            // The address book has no picture to give; the matched account does, and
-            // this list is only ever accounts.
-            contact.copy(photo = match.profilePicture)
-        }
-    }
-    val source = onIq
-
     val context = LocalContext.current
     val session = remember { SessionStore(context) }
     val scope = rememberCoroutineScope()
+    val token = session.token
+    val requestContacts = rememberContactsRequest()
+    val deviceContacts = ContactsRepository.contacts
 
-    // Distinguishes "nobody matched" from "we never got to ask", which need
-    // different things said about them.
-    val syncSucceeded = ContactsRepository.lastSync != null
-
-    val grouped = remember(query, source) {
-        source
-            .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
-            // A contact saved as a number alone has an empty name, and `first()`
-            // on an empty string throws - one such entry in the phone book took
-            // the whole tab down. Nameless contacts file under '#'.
-            .groupBy { it.name.trim().firstOrNull()?.uppercaseChar() ?: '#' }
-            .toSortedMap()
+    val results = rememberPeopleResults(token, query)
+    val rows = remember(results.people, deviceContacts) { results.people.map(::rowOf) }
+    val grouped = remember(rows) {
+        // A contact saved as a number alone has an empty name, and `first()` on an
+        // empty string throws - one such entry took the whole tab down once.
+        // Nameless people, shown by their number, file under '#' at the end, as a
+        // phone's own contacts do.
+        rows.groupBy { it.name.trim().firstOrNull()?.takeIf(Char::isLetter)?.uppercaseChar() ?: '#' }
+            .toSortedMap(compareBy<Char> { it == '#' }.thenBy { it })
     }
 
-    // Re-reads the address book and asks the server again who is on IQ Social.
-    // Someone who has just saved a number and come here to message them is the
-    // whole reason this tab is ever pulled.
+    // Sends the whole phone book again - the only way to find someone already in it
+    // who has joined IQ since - and fetches the list again. An ordinary launch sends
+    // only numbers that are new.
     var pull by remember { mutableIntStateOf(0) }
-    val pullContext = LocalContext.current
     LaunchedEffect(pull) {
         if (pull > 0) {
-            ContactsRepository.refresh(pullContext, SessionStore(pullContext).token)
+            ContactsRepository.refresh(context, token, everything = true)
+            token?.let { PeopleRepository.refresh(it) }
         }
     }
 
     PullToRefreshBox(
-        isRefreshing = ContactsRepository.syncing,
+        isRefreshing = ContactsRepository.syncing || PeopleRepository.loading,
         onRefresh = { pull++ },
         modifier = Modifier.fillMaxSize()
     ) {
@@ -153,7 +143,7 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
                 )
                 CircleIconButton(
                     icon = IqIcons.PersonAdd,
-                    contentDescription = "Find people on IQ Social",
+                    contentDescription = "New message",
                     onClick = onFindPeople,
                     iconSize = d.iconLg
                 )
@@ -168,54 +158,58 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
         item {
             SearchField(
                 value = query,
-                onValueChange = { query = it },
-                placeholder = "Search people",
+                onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
+                placeholder = "Search your people",
                 modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
             )
         }
 
-        if (deviceContacts.isEmpty()) {
+        if (deviceContacts.isEmpty() && !results.isSearch) {
             item {
                 SyncContactsRow(onClick = requestContacts)
             }
         }
 
-        item {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { }
-                    .heightIn(min = 64.dp)
-                    .padding(horizontal = d.gutter, vertical = d.gapMd),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
+        if (!results.isSearch) {
+            item {
+                Row(
                     Modifier
-                        .size(d.avatarLg)
-                        .clip(CircleShape)
-                        .background(CrimsonTint),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .clickable { }
+                        .heightIn(min = 64.dp)
+                        .padding(horizontal = d.gutter, vertical = d.gapMd),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
+                    Box(
+                        Modifier
+                            .size(d.avatarLg)
+                            .clip(CircleShape)
+                            .background(CrimsonTint),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
+                    }
+                    Spacer(Modifier.width(d.gapMd))
+                    Text(
+                        "New group",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Ink
+                    )
                 }
-                Spacer(Modifier.width(d.gapMd))
-                Text(
-                    "New group",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Ink
-                )
             }
         }
 
-        // The address book was read but nobody in it is on IQ Social. Without this
-        // the tab would just look broken.
-        if (deviceContacts.isNotEmpty() && onIq.isEmpty()) {
+        if (rows.isEmpty()) {
             item {
-                NoMatchesState(
-                    synced = syncSucceeded,
-                    contactCount = deviceContacts.size,
-                    onRetry = requestContacts
-                )
+                if (results.loading) {
+                    ListSkeleton(rows = 5, lines = 1)
+                } else {
+                    EmptyPeople(
+                        isSearch = results.isSearch,
+                        failed = results.error != null,
+                        onRetry = { pull++ }
+                    )
+                }
             }
         }
 
@@ -235,12 +229,9 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
             people.forEach { person ->
                 item(key = person.id) {
                     ContactRow(person) {
-                        // The contact is an IQ user by definition here, so their
-                        // uid opens the conversation, creating it if needed.
-                        val uid = ContactsRepository.matchFor(person)?.uid ?: return@ContactRow
-                        val token = session.token ?: return@ContactRow
+                        val auth = token ?: return@ContactRow
                         scope.launch {
-                            val r = ConversationsApi.open(token, uid)
+                            val r = ConversationsApi.open(auth, person.id)
                             if (r is ApiResult.Success) onOpenChat(r.data.id)
                         }
                     }
@@ -254,15 +245,22 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
     }
 }
 
+/** A row of the list: the name this phone gives them, and how they got here. */
+private fun rowOf(saved: SavedPerson): Person {
+    return Person(
+        id = saved.uid,
+        name = saved.shownName,
+        handle = saved.phone ?: "Added by QR code",
+        photo = saved.person.profilePicture
+    )
+}
+
 /**
- * Shown when the address book was read but produced no one to talk to.
- *
- * [synced] separates the two reasons that look identical on screen: the server
- * answered and matched nobody, or it was never asked. Only the second is worth
- * offering a retry for.
+ * Shown when there is nobody to list: nobody matches the search, nobody is on the
+ * list yet, or the list could not be fetched - only the last is worth a retry.
  */
 @Composable
-private fun NoMatchesState(synced: Boolean, contactCount: Int, onRetry: () -> Unit) {
+private fun EmptyPeople(isSearch: Boolean, failed: Boolean, onRetry: () -> Unit) {
     val d = IqTheme.dimens
     Column(
         Modifier
@@ -282,26 +280,28 @@ private fun NoMatchesState(synced: Boolean, contactCount: Int, onRetry: () -> Un
 
         Spacer(Modifier.height(d.gapLg))
         Text(
-            if (synced) "No contacts on IQ Social yet" else "Couldn't check your contacts",
+            when {
+                failed -> "Couldn't load your people"
+                isSearch -> "Nobody found"
+                else -> "No people yet"
+            },
             style = MaterialTheme.typography.titleLarge,
             color = Ink
         )
 
         Spacer(Modifier.height(d.gapSm))
         Text(
-            if (synced) {
-                "None of your $contactCount contacts have an account yet. " +
-                    "They'll show up here when they join."
-            } else {
-                "Your contacts are on this phone, but we couldn't reach the server " +
-                    "to see who is on IQ Social."
+            when {
+                failed -> "Check your connection and try again."
+                isSearch -> "Nobody on your list matches that. Search looks only at your people."
+                else -> "Your contacts on IQ Social show up here, and anyone you add by QR code."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = InkMuted,
             textAlign = TextAlign.Center
         )
 
-        if (!synced) {
+        if (failed) {
             Spacer(Modifier.height(d.gapLg))
             Text(
                 "Try again",

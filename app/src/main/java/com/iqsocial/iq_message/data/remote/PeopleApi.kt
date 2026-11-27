@@ -3,14 +3,9 @@ package com.iqsocial.iq_message.data.remote
 import android.net.Uri
 import com.iqsocial.iq_message.data.profile.ProfileCache
 import androidx.compose.runtime.Immutable
+import org.json.JSONArray
+import org.json.JSONObject
 
-/**
- * Finding people to message.
- *
- * The spec reuses its `Person` shape here, so [ChatPerson] parses both; note that
- * these results **never carry a phone number**, by design — you can look someone up
- * by their number, but you cannot read numbers back off a search.
- */
 /**
  * Somebody else's profile, as much of it as they share.
  *
@@ -52,47 +47,106 @@ data class PublicProfile(
     }
 }
 
+/**
+ * One person on the account's own contact list (`GET /v1/people`).
+ *
+ * [sources] says how they got there: `phone` (the phone book) or `qr` (their QR
+ * code, scanned or typed). [phone] is their number as **this account's** phone book
+ * holds it, so a screen can show the name saved for them here; null unless `phone`
+ * is a source.
+ */
+@Immutable
+data class SavedPerson(
+    val person: ChatPerson,
+    val sources: List<String>,
+    val phone: String?,
+    val addedAt: Long
+) {
+    val uid: String get() = person.uid
+    val fromPhoneBook: Boolean get() = SOURCE_PHONE in sources
+
+    /** Back into the server's shape, for the copy kept on this phone. */
+    fun toJson(): JSONObject = JSONObject()
+        .put("uid", person.uid)
+        .put("fullname", person.fullname)
+        .put("profile_picture", person.profilePicture)
+        .put("verified", person.verified)
+        .put("badge_key", person.badgeKey)
+        .put("allow_screenshot", person.allowScreenshot)
+        .put("sources", JSONArray(sources))
+        .put("phone", phone ?: JSONObject.NULL)
+        .put("added_at", addedAt)
+
+    companion object {
+        const val SOURCE_PHONE = "phone"
+        const val SOURCE_QR = "qr"
+
+        fun from(json: JSONObject): SavedPerson = SavedPerson(
+            person = ChatPerson.from(json),
+            sources = json.optJSONArray("sources")
+                ?.let { array -> (0 until array.length()).map { array.string(it) } }
+                .orEmpty(),
+            phone = json.string("phone").takeIf { it.isNotBlank() },
+            addedAt = json.optLong("added_at")
+        )
+    }
+}
+
+/**
+ * The account's people, and the people behind an id.
+ *
+ * There is **one** list of people in this app - the phone book's people on IQ and
+ * whoever was added by QR code - and every screen that offers someone reads it: the
+ * People tab, "New message", the rewards special-person picker and "Add to call".
+ * Searching only ever looks inside it. The server has no search over everyone on IQ
+ * any more, by the owner's decision.
+ */
 object PeopleApi {
 
     /** `q` is rejected below this length, so the UI should not ask. */
     const val MIN_QUERY = 2
     const val MAX_QUERY = 64
 
-    /** How the server decided to read `q`. */
     @Immutable
-    data class SearchResult(
-        /** `phone` or `name`, as the server reports it. */
-        val by: String,
-        val items: List<ChatPerson>
-    ) {
-        val byPhone: Boolean get() = by.equals("phone", ignoreCase = true)
-    }
-
-    @Immutable
-    data class Suggestions(
-        val items: List<ChatPerson>,
+    data class Page(
+        val items: List<SavedPerson>,
+        /** Null on the last page. A page can hold fewer than asked for, so emptiness is not the end. */
         val nextCursor: String?
     )
 
     /**
-     * Search by name or by a **complete** phone number.
+     * One page of the list, newest first - all of it, or what matches [query].
      *
-     * The server decides which: a query shaped like a number is an exact lookup —
-     * partial numbers match nothing — and anything else is a name search that
-     * matches whole words, so `Rahim` finds `Rahim Uddin` but `Rah` does not.
-     *
-     * [region] resolves a number typed without a country code, and defaults to the
-     * caller's own country when omitted.
+     * [query] matches the start of any word in the name (`rah` finds Rahim Uddin),
+     * or, when it looks like a number, digits anywhere in a saved number.
      */
+    suspend fun list(
+        token: String,
+        query: String? = null,
+        cursor: String? = null,
+        limit: Int? = null
+    ): ApiResult<Page> {
+        val params = buildList {
+            query?.trim()?.takeIf { it.length >= MIN_QUERY }?.let { add("q=" + Uri.encode(it.take(MAX_QUERY))) }
+            cursor?.let { add("cursor=" + Uri.encode(it)) }
+            limit?.let { add("limit=$it") }
+        }
+        val path = "/v1/people" + if (params.isEmpty()) "" else "?" + params.joinToString("&")
+        return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
+            Page(
+                items = json.optJSONArray("items").mapObjects(SavedPerson::from),
+                nextCursor = json.string("next_cursor").takeIf { it.isNotBlank() && it != "null" }
+            )
+        }
+    }
+
     /**
      * One person, by id.
      *
      * 404 covers everything that is not a plain yes - an unknown id, a banned
-     * account, somebody who has blocked you - which is the same answer search
-     * gives, and for the same reason: the absence of an answer should not say
-     * which of those it was.
-     */
-    /**
+     * account, somebody who has blocked you - so the absence of an answer does not
+     * say which of those it was.
+     *
      * Their profile, and a copy kept on this phone for opening it offline - see
      * [cachedProfile].
      */
@@ -112,55 +166,4 @@ object PeopleApi {
     suspend fun cachedProfile(uid: String): PublicProfile? =
         ProfileCache.read(ProfileCache.personKey(uid))
             ?.let { runCatching { PublicProfile.from(it) }.getOrNull() }
-
-    suspend fun search(
-        token: String,
-        query: String,
-        region: String? = null,
-        limit: Int? = null
-    ): ApiResult<SearchResult> {
-        val q = query.trim()
-        if (q.length < MIN_QUERY) {
-            return ApiResult.Failure("Type at least $MIN_QUERY characters")
-        }
-        val path = buildString {
-            append("/v1/people/search?q=").append(Uri.encode(q.take(MAX_QUERY)))
-            if (!region.isNullOrBlank()) append("&region=").append(region.uppercase())
-            limit?.let { append("&limit=").append(it) }
-        }
-        return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
-            SearchResult(
-                by = json.string("by"),
-                items = json.optJSONArray("items").mapObjects(ChatPerson::from)
-            )
-        }
-    }
-
-    /**
-     * People the caller follows on IQ Social, most recently followed first.
-     *
-     * Cursor-paginated, and the spec warns a page can hold fewer than `limit`
-     * items — so emptiness is not the end, only a null `next_cursor` is.
-     */
-    suspend fun suggestions(
-        token: String,
-        cursor: String? = null,
-        limit: Int? = null
-    ): ApiResult<Suggestions> {
-        val path = buildString {
-            append("/v1/people/suggestions")
-            val params = buildList {
-                cursor?.let { add("cursor=" + Uri.encode(it)) }
-                limit?.let { add("limit=$it") }
-            }
-            if (params.isNotEmpty()) append("?").append(params.joinToString("&"))
-        }
-        return ApiClient.get(path, token, MessengerConfig.BASE_URL).mapTo { json ->
-            Suggestions(
-                items = json.optJSONArray("items").mapObjects(ChatPerson::from),
-                nextCursor = json.string("next_cursor")
-                    .takeIf { it.isNotBlank() && it != "null" }
-            )
-        }
-    }
 }
