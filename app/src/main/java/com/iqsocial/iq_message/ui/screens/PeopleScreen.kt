@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -124,133 +125,140 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = ContactsRepository.syncing,
-        onRefresh = { pull++ },
-        modifier = Modifier.fillMaxSize()
+    // The title bar stays put; only the list under it scrolls.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Paper)
     ) {
-        LazyColumn(
+        Row(
             Modifier
-                .fillMaxSize()
-                .background(Color.White),
-            contentPadding = PaddingValues(bottom = d.gapXl)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-        item {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "People",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                CircleIconButton(
-                    icon = IqIcons.PersonAdd,
-                    contentDescription = "Find people on IQ Social",
-                    onClick = onFindPeople,
-                    iconSize = d.iconLg
-                )
-                CircleIconButton(
-                    icon = IqIcons.MoreVert,
-                    contentDescription = "More options",
-                    onClick = {}
-                )
-            }
-        }
-
-        item {
-            SearchField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = "Search people",
-                modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
+            Text(
+                "People",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            CircleIconButton(
+                icon = IqIcons.PersonAdd,
+                contentDescription = "Find people on IQ Social",
+                onClick = onFindPeople,
+                iconSize = d.iconLg
+            )
+            CircleIconButton(
+                icon = IqIcons.MoreVert,
+                contentDescription = "More options",
+                onClick = {}
             )
         }
-
-        if (deviceContacts.isEmpty()) {
-            item {
-                SyncContactsRow(onClick = requestContacts)
-            }
-        }
-
-        item {
-            Row(
+        PullToRefreshBox(
+            isRefreshing = ContactsRepository.syncing,
+            onRefresh = { pull++ },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            LazyColumn(
                 Modifier
-                    .fillMaxWidth()
-                    .clickable { }
-                    .heightIn(min = 64.dp)
-                    .padding(horizontal = d.gutter, vertical = d.gapMd),
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .background(Paper),
+                contentPadding = PaddingValues(bottom = d.gapXl)
             ) {
-                Box(
-                    Modifier
-                        .size(d.avatarLg)
-                        .clip(CircleShape)
-                        .background(CrimsonTint),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
-                }
-                Spacer(Modifier.width(d.gapMd))
-                Text(
-                    "New group",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Ink
-                )
-            }
-        }
 
-        // The address book was read but nobody in it is on IQ Social. Without this
-        // the tab would just look broken.
-        if (deviceContacts.isNotEmpty() && onIq.isEmpty()) {
             item {
-                NoMatchesState(
-                    synced = syncSucceeded,
-                    contactCount = deviceContacts.size,
-                    onRetry = requestContacts
+                SearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "Search people",
+                    modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
                 )
             }
-        }
 
-        grouped.forEach { (letter, people) ->
-            item(key = "header_$letter") {
-                Text(
-                    letter.toString(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = InkMuted,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.White)
-                        .padding(start = d.gutter, top = d.gapMd, bottom = d.gapXs)
-                )
+            if (deviceContacts.isEmpty()) {
+                item {
+                    SyncContactsRow(onClick = requestContacts)
+                }
             }
-            people.forEach { person ->
-                item(key = person.id) {
-                    ContactRow(person) {
-                        // The contact is an IQ user by definition here, so their
-                        // uid opens the conversation, creating it if needed.
-                        val uid = ContactsRepository.matchFor(person)?.uid ?: return@ContactRow
-                        val token = session.token ?: return@ContactRow
-                        scope.launch {
-                            val r = ConversationsApi.open(token, uid)
-                            if (r is ApiResult.Success) onOpenChat(r.data.id)
-                        }
+
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { }
+                        .heightIn(min = 64.dp)
+                        .padding(horizontal = d.gutter, vertical = d.gapMd),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(d.avatarLg)
+                            .clip(CircleShape)
+                            .background(CrimsonTint),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
                     }
-                    HairlineDivider(
-                        Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
+                    Spacer(Modifier.width(d.gapMd))
+                    Text(
+                        "New group",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Ink
                     )
                 }
             }
+
+            // The address book was read but nobody in it is on IQ Social. Without this
+            // the tab would just look broken.
+            if (deviceContacts.isNotEmpty() && onIq.isEmpty()) {
+                item {
+                    NoMatchesState(
+                        synced = syncSucceeded,
+                        contactCount = deviceContacts.size,
+                        onRetry = requestContacts
+                    )
+                }
+            }
+
+            grouped.forEach { (letter, people) ->
+                item(key = "header_$letter") {
+                    Text(
+                        letter.toString(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = InkMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Paper)
+                            .padding(start = d.gutter, top = d.gapMd, bottom = d.gapXs)
+                    )
+                }
+                people.forEach { person ->
+                    item(key = person.id) {
+                        ContactRow(person) {
+                            // The contact is an IQ user by definition here, so their
+                            // uid opens the conversation, creating it if needed.
+                            val uid = ContactsRepository.matchFor(person)?.uid ?: return@ContactRow
+                            val token = session.token ?: return@ContactRow
+                            scope.launch {
+                                val r = ConversationsApi.open(token, uid)
+                                if (r is ApiResult.Success) onOpenChat(r.data.id)
+                            }
+                        }
+                        HairlineDivider(
+                            Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
+                        )
+                    }
+                }
+            }
         }
-    }
+        }
     }
 }
 

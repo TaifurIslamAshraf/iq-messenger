@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -184,112 +185,119 @@ fun RewardsScreen(
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = loading && today != null,
-        onRefresh = { reload() },
-        modifier = Modifier.fillMaxSize()
+    // The title bar stays put; only the list under it scrolls.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Paper)
     ) {
-        LazyColumn(
+        Row(
             Modifier
-                .fillMaxSize()
-                .background(Color.White),
-            contentPadding = PaddingValues(bottom = d.gapXl)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = d.gutter, end = d.gutter, top = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(start = d.gutter, end = d.gutter, top = d.gapSm),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Rewards",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
+            Text(
+                "Rewards",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        PullToRefreshBox(
+            isRefreshing = loading && today != null,
+            onRefresh = { reload() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            LazyColumn(
+                Modifier
+                    .fillMaxSize()
+                    .background(Paper),
+                contentPadding = PaddingValues(bottom = d.gapXl)
+            ) {
 
-            if (state != null) {
-                item { Summary(state, liveMs) }
+                if (state != null) {
+                    item { Summary(state, liveMs) }
 
-                item {
-                    SpecialCard(
-                        special = state.special,
-                        liveMs = liveMs,
-                        livePeer = state.live?.peerUid,
-                        busy = changing,
-                        onPick = { picking = true },
-                        onClear = {
-                            val auth = token ?: return@SpecialCard
-                            changing = true
-                            scope.launch {
-                                applySpecial(RewardsApi.clearSpecial(auth), picked = false)
-                            }
-                        }
-                    )
-                }
-
-                if (state.slots.isNotEmpty()) {
                     item {
-                        SectionLabel(
-                            "Today's people",
-                            "${state.slotsUsed} of ${state.slotsTotal} slots used"
-                        )
-                    }
-                    // Only slots with somebody in them - a row draws nothing
-                    // for an empty one anyway - and each person-and-kind once.
-                    // The key is built from those two, and a lazy list given the
-                    // same key twice does not skip the second: it throws. Two
-                    // empty slots of one kind would have been exactly that.
-                    val filled = state.slots
-                        .filter { it.person?.uid?.isNotBlank() == true }
-                        .distinctBy { it.person?.uid + it.kind.wire }
-                    items(filled, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
-                        SlotRow(
-                            slot = slot,
+                        SpecialCard(
+                            special = state.special,
                             liveMs = liveMs,
                             livePeer = state.live?.peerUid,
-                            onClick = { slot.person?.uid?.let(onOpenChat) }
+                            busy = changing,
+                            onPick = { picking = true },
+                            onClear = {
+                                val auth = token ?: return@SpecialCard
+                                changing = true
+                                scope.launch {
+                                    applySpecial(RewardsApi.clearSpecial(auth), picked = false)
+                                }
+                            }
                         )
+                    }
+
+                    if (state.slots.isNotEmpty()) {
+                        item {
+                            SectionLabel(
+                                "Today's people",
+                                "${state.slotsUsed} of ${state.slotsTotal} slots used"
+                            )
+                        }
+                        // Only slots with somebody in them - a row draws nothing
+                        // for an empty one anyway - and each person-and-kind once.
+                        // The key is built from those two, and a lazy list given the
+                        // same key twice does not skip the second: it throws. Two
+                        // empty slots of one kind would have been exactly that.
+                        val filled = state.slots
+                            .filter { it.person?.uid?.isNotBlank() == true }
+                            .distinctBy { it.person?.uid + it.kind.wire }
+                        items(filled, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
+                            SlotRow(
+                                slot = slot,
+                                liveMs = liveMs,
+                                livePeer = state.live?.peerUid,
+                                onClick = { slot.person?.uid?.let(onOpenChat) }
+                            )
+                        }
+                    }
+
+                    if (state.normalFree > 0) {
+                        item { MoreSlots(state.normalFree) { calling = true } }
                     }
                 }
 
-                if (state.normalFree > 0) {
-                    item { MoreSlots(state.normalFree) { calling = true } }
+                note?.let { why ->
+                    item { Note(why) { note = null } }
                 }
-            }
 
-            note?.let { why ->
-                item { Note(why) { note = null } }
-            }
+                if (loading && today == null) {
+                    item { RewardsSkeleton() }
+                }
 
-            if (loading && today == null) {
-                item { RewardsSkeleton() }
-            }
-
-            failure?.let { why ->
-                item {
-                    Centred {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                why,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = InkMuted,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(Modifier.height(d.gapMd))
-                            Text(
-                                "Try again",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Crimson,
-                                modifier = Modifier.clickable { reload() }
-                            )
+                failure?.let { why ->
+                    item {
+                        Centred {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    why,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = InkMuted,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(Modifier.height(d.gapMd))
+                                Text(
+                                    "Try again",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Crimson,
+                                    modifier = Modifier.clickable { reload() }
+                                )
+                            }
                         }
                     }
                 }
@@ -628,7 +636,7 @@ private fun Action(
         modifier
             .height(d.buttonHeight)
             .clip(RoundedCornerShape(d.radiusMd))
-            .background(if (filled) Crimson else Color.White)
+            .background(if (filled) Crimson else Paper)
             .clickable(enabled = enabled, onClick = onClick),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically

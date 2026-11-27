@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.components
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -131,7 +132,7 @@ fun ContactsAccessDialog(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(start = d.gapLg, end = d.gapLg, bottom = d.gapLg)
         ) {
             Row(

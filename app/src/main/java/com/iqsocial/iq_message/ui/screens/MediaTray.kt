@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -220,7 +221,7 @@ fun MediaTray(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .height(with(density) { heightPx.toDp() })
     ) {
         HairlineDivider()
@@ -358,7 +359,7 @@ private fun SendBar(count: Int, onSend: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gutter, vertical = d.gapSm),
         verticalAlignment = Alignment.CenterVertically
     ) {

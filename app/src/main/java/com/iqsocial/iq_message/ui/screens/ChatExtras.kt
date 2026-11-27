@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.runtime.mutableStateMapOf
 import com.iqsocial.iq_message.data.remote.MessagePage
@@ -118,7 +119,7 @@ fun ForwardPicker(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapMd)
         ) {
             Text(
@@ -228,7 +229,7 @@ fun MessageInfoSheet(detail: MessageInfo, onDismiss: () -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(d.gutter)
         ) {
             Text("Message info", style = MaterialTheme.typography.titleLarge, color = Ink)
@@ -316,7 +317,7 @@ fun InConversationSearch(token: String?, conversationId: String, onDismiss: () -
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapMd)
         ) {
             SearchField(
@@ -381,7 +382,7 @@ fun SharedItems(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color.White,
+        containerColor = Paper,
         dragHandle = {
             Box(
                 Modifier
@@ -433,7 +434,7 @@ fun SharedMediaScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Paper)
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
@@ -839,7 +840,7 @@ fun ReactionSheet(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(topStart = d.radiusXl, topEnd = d.radiusXl))
-                    .background(Color.White)
+                    .background(Paper)
                     .padding(vertical = d.gapMd)
             ) {
                 Row(
@@ -1002,7 +1003,7 @@ fun PeerProfileSheet(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapLg),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -1169,7 +1170,7 @@ fun PermissionsSheet(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapLg)
         ) {
             Row(
@@ -1338,7 +1339,7 @@ fun CallPermissionDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color.White,
+        containerColor = Paper,
         title = { Text(title, color = Ink) },
         text = {
             Column {

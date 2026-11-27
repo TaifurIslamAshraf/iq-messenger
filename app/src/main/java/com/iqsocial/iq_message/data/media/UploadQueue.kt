@@ -399,7 +399,13 @@ object UploadQueue {
      * any more: the upload hands the message to the queue and stops being involved,
      * and the queue may not get it away for hours.
      */
-    fun handedOver(clientId: String) {
+    fun handedOver(clientId: String, serverId: String = "") {
+        // The picture the bubble was drawing goes with the message, so the
+        // server's copy of it opens on the same picture rather than on nothing.
+        val leaving = synchronized(lock) { outgoing.firstOrNull { it.clientId == clientId } }
+        if (leaving != null && serverId.isNotBlank() && leaving.kind != "voice") {
+            DeviceGallery.peekPreview(leaving.uri)?.let { MediaCache.seed(serverId, it) }
+        }
         dropOutgoing(clientId)
         replies -= clientId
     }

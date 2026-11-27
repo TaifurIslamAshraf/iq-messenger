@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -184,88 +185,95 @@ fun ChatsScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Paper)
     ) {
         // Dragging the list down asks the server again. It was already possible -
         // behind "Refresh" in the overflow menu - which is not where anyone looks
         // for it: a list of messages is the screen people reach for by pulling the
         // moment they suspect it is stale.
-        PullToRefreshBox(
-            isRefreshing = ChatRepository.loading,
-            onRefresh = { refresh = !refresh },
-            modifier = Modifier.fillMaxSize()
+        // The title bar stays put; only the list under it scrolls.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Paper)
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = d.fab + d.gapXl)
+            MessagesHeader(
+                archived = archived,
+                onSearch = onSearch,
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = d.gapSm)
             ) {
-            item {
-                MessagesHeader(
-                    archived = archived,
-                    onSearch = onSearch,
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(top = d.gapSm)
-                ) {
-                    Box {
-                        MessagesMenuButton { menuOpen = true }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text(if (archived) "Back to inbox" else "Archived") },
-                                onClick = {
-                                    menuOpen = false
-                                    scope.launch {
-                                        ChatRepository.showFolder(
-                                            token,
-                                            if (archived) ConversationsApi.Folder.INBOX
-                                            else ConversationsApi.Folder.ARCHIVED
-                                        )
-                                    }
+                Box {
+                    MessagesMenuButton { menuOpen = true }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (archived) "Back to inbox" else "Archived") },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch {
+                                    ChatRepository.showFolder(
+                                        token,
+                                        if (archived) ConversationsApi.Folder.INBOX
+                                        else ConversationsApi.Folder.ARCHIVED
+                                    )
                                 }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Refresh") },
-                                onClick = {
-                                    menuOpen = false
-                                    refresh = !refresh
-                                }
-                            )
-                        }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Refresh") },
+                            onClick = {
+                                menuOpen = false
+                                refresh = !refresh
+                            }
+                        )
                     }
                 }
             }
+            PullToRefreshBox(
+                isRefreshing = ChatRepository.loading,
+                onRefresh = { refresh = !refresh },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = d.fab + d.gapXl)
+                ) {
 
-            // Reels at the top of the list, under the title.
-            item(key = "reels") {
-                Spacer(Modifier.height(d.gapMd))
-                ReelsStrip(onOpen = onOpenReel)
-            }
+                // Reels at the top of the list, under the title.
+                item(key = "reels") {
+                    Spacer(Modifier.height(d.gapMd))
+                    ReelsStrip(onOpen = onOpenReel)
+                }
 
-            if (rows.isEmpty() && ChatRepository.loaded) {
-                item { EmptyChats(searching = false) }
-            }
-            // Nothing stored and nothing fetched yet: the first run, or a signed-in
-            // phone whose database was cleared. Every other time the list is drawn
-            // from Room before the request is even sent, so there is nothing to
-            // stand in for - which is why this is not simply `loading`.
-            if (rows.isEmpty() && !ChatRepository.loaded) {
-                item { ListSkeleton(trailing = true) }
-            }
-            items(rows, key = { it.id }) { conversation ->
-                ConversationRow(
-                    conversation = conversation,
-                    onClick = { onOpenChat(conversation.id) },
-                    onLongPress = { acting = conversation },
-                    inboxStyle = true
-                )
-                HairlineDivider(
-                    Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter),
-                    color = Hairline.copy(alpha = 0.65f)
-                )
-            }
+                if (rows.isEmpty() && ChatRepository.loaded) {
+                    item { EmptyChats(searching = false) }
+                }
+                // Nothing stored and nothing fetched yet: the first run, or a signed-in
+                // phone whose database was cleared. Every other time the list is drawn
+                // from Room before the request is even sent, so there is nothing to
+                // stand in for - which is why this is not simply `loading`.
+                if (rows.isEmpty() && !ChatRepository.loaded) {
+                    item { ListSkeleton(trailing = true) }
+                }
+                items(rows, key = { it.id }) { conversation ->
+                    ConversationRow(
+                        conversation = conversation,
+                        onClick = { onOpenChat(conversation.id) },
+                        onLongPress = { acting = conversation },
+                        inboxStyle = true
+                    )
+                    HairlineDivider(
+                        Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter),
+                        color = Hairline.copy(alpha = 0.65f)
+                    )
+                }
 
-        }
+            }
+            }
         }
 
         acting?.let { conversation ->
@@ -398,7 +406,7 @@ private fun ConversationActions(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapMd)
         ) {
             Text(
@@ -444,7 +452,7 @@ private fun MuteDurations(onDismiss: () -> Unit, onPick: (String) -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapMd)
         ) {
             Text(
@@ -517,7 +525,7 @@ internal fun ConversationRow(
                     .padding(horizontal = d.gapSm)
                     .padding(vertical = d.gapXs / 2)
                     .clip(RoundedCornerShape(d.radiusLg))
-                    .background(if (unseen) CrimsonTint.copy(alpha = 0.42f) else Color.White)
+                    .background(if (unseen) CrimsonTint.copy(alpha = 0.42f) else Paper)
                 else Modifier
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongPress)

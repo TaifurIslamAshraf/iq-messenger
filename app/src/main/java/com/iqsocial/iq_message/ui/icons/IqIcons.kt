@@ -666,6 +666,16 @@ object IqIcons {
         line(2.2f) { moveTo(8.6f, 11.8f); lineTo(11.2f, 14.4f); lineTo(15.6f, 10f) }
     }
 
+    /** A crescent: dark mode. */
+    val Moon = icon("Moon") {
+        line {
+            moveTo(20.3f, 14.6f)
+            arcTo(8.6f, 8.6f, 0f, true, true, 9.4f, 3.7f)
+            arcTo(6.9f, 6.9f, 0f, false, false, 20.3f, 14.6f)
+            close()
+        }
+    }
+
     val Bell = icon("Bell") {
         line {
             moveTo(18.6f, 17.4f)

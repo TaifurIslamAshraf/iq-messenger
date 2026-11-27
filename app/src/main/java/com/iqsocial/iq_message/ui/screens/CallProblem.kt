@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -51,7 +52,7 @@ fun CallProblem(reason: String, onDismiss: () -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(d.gapLg),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {

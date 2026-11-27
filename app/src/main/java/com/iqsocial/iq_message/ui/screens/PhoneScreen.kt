@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -466,7 +467,7 @@ private fun PhoneField(value: String, onValueChange: (String) -> Unit) {
             .padding(top = labelHalf)
             .height(d.fieldHeightLg)
             .border(1.dp, Hairline, RoundedCornerShape(d.radiusMd))
-            .background(Color.White, RoundedCornerShape(d.radiusMd))
+            .background(Paper, RoundedCornerShape(d.radiusMd))
     ) {
         Row(
             Modifier

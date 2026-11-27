@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.components
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -106,7 +107,7 @@ fun Avatar(
     ringColor: Color = Crimson,
     ringGap: Dp = 2.dp,
     showPresence: Boolean = false,
-    presenceBorder: Color = Color.White
+    presenceBorder: Color = Paper
 ) {
     val pad = if (ringWidth > 0.dp) ringWidth + ringGap else 0.dp
     val outer = size + pad * 2

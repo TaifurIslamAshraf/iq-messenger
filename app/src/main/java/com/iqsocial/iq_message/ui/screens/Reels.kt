@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.CallBlack
 import android.view.LayoutInflater
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
@@ -165,7 +166,7 @@ private fun ReelCard(reel: Reel, onClick: () -> Unit) {
         Modifier
             .size(CARD_WIDTH, CARD_HEIGHT)
             .clip(RoundedCornerShape(d.radiusMd))
-            .background(Ink)
+            .background(CallBlack)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {

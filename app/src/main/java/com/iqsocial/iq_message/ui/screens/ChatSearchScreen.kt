@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -120,7 +121,7 @@ fun ChatSearchScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Paper)
             .statusBarsPadding()
             .imePadding()
     ) {

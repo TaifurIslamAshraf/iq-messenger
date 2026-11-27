@@ -185,7 +185,6 @@ data class MessengerProfile(
             "privacy_settings",
             JSONObject()
                 .put("who_can_message", whoCanMessage)
-                .put("who_can_call", whoCanCall)
         )
         .put(
             "name_change",

@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.components
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -218,7 +219,7 @@ private fun NotificationsSettingsDialog(onOpen: () -> Unit, onSkip: () -> Unit) 
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(start = d.gapLg, end = d.gapLg, bottom = d.gapLg)
         ) {
             Row(

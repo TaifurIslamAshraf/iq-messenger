@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -131,7 +132,7 @@ fun MessageActionOverlay(
                 .padding(horizontal = d.gutter)
                 .shadow(d.scaled(8), CircleShape)
                 .clip(CircleShape)
-                .background(Color.White)
+                .background(Paper)
                 .padding(horizontal = d.gapSm, vertical = d.gapXs),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -166,7 +167,7 @@ fun MessageActionOverlay(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color.White)
+                .background(Paper)
         ) {
             HairlineDivider()
             Row(

@@ -1,5 +1,10 @@
 package com.iqsocial.iq_message.ui.screens
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -126,15 +131,113 @@ fun PersonScreen(
         Person(id = uid.ifBlank { name }, name = name, handle = "", photo = photo)
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(CanvasGrey)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Box {
-            Cover(url = profile?.coverPicture.orEmpty())
+    val pageScroll = rememberScrollState()
+    var heroPx by remember { mutableIntStateOf(1) }
+    var barPx by remember { mutableIntStateOf(0) }
+    val barFill by remember {
+        derivedStateOf {
+            (pageScroll.value.toFloat() / (heroPx - barPx).coerceAtLeast(1)).coerceIn(0f, 1f)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(CanvasGrey)
+                .verticalScroll(pageScroll)
+        ) {
+            Box(Modifier.onSizeChanged { heroPx = it.height }) {
+                Cover(url = profile?.coverPicture.orEmpty())
 
+                // Room for the bar, which is drawn over the page - see below.
+                Spacer(
+                    Modifier
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(vertical = d.gapSm)
+                        .height(d.iconButton)
+                )
+            }
+
+            // Lifted over the cover's lower edge, as a profile picture sits on a
+            // banner everywhere else.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.gutterTight)
+                    .offsetUpBy(d.avatarXl / 2),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Avatar(
+                    person = face,
+                    size = d.avatarXl,
+                    ringWidth = d.scaled(4),
+                    ringColor = Paper,
+                    ringGap = 0.dp
+                )
+                Spacer(Modifier.height(d.gapSm))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = Ink,
+                        maxLines = 2,
+                        textAlign = TextAlign.Center
+                    )
+                    if (profile?.isVerified == true) {
+                        Spacer(Modifier.width(d.gapXs))
+                        Icon(IqIcons.Verified, "Verified", Modifier.size(d.icon), tint = Crimson)
+                    }
+                }
+
+                profile?.bio?.takeIf { it.isNotBlank() }?.let { bio ->
+                    Spacer(Modifier.height(d.gapSm))
+                    Text(
+                        bio,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = InkMuted,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(Modifier.height(d.gapLg))
+                Counts(profile)
+
+                // No call buttons here: calls are placed from the chat, where
+                // whether this person may be called is known and shown.
+
+                when {
+                    failed != null && profile == null -> {
+                        Spacer(Modifier.height(d.gapLg))
+                        Text(
+                            // 404 here is not an error to explain away: it is an
+                            // unknown id, a banned account, or somebody who has
+                            // blocked you, and the server deliberately does not say
+                            // which. Neither does this.
+                            "This profile is not available.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = InkFaint
+                        )
+                    }
+
+                    profile == null -> {
+                        Spacer(Modifier.height(d.gapLg))
+                        ProfileSkeleton()
+                    }
+                }
+
+                Spacer(Modifier.height(d.gapXxl))
+            }
+        }
+
+        // The bar - back, the title, the buttons - stays at the top while the
+        // page scrolls under it. Clear over the header, and filled in as the
+        // header goes, so its icons are never left floating on the content.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onSizeChanged { barPx = it.height }
+                .background(Paper.copy(alpha = barFill))
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -150,79 +253,6 @@ fun PersonScreen(
                     tint = Color.White
                 )
             }
-        }
-
-        // Lifted over the cover's lower edge, as a profile picture sits on a
-        // banner everywhere else.
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = d.gutterTight)
-                .offsetUpBy(d.avatarXl / 2),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Avatar(
-                person = face,
-                size = d.avatarXl,
-                ringWidth = d.scaled(4),
-                ringColor = Color.White,
-                ringGap = 0.dp
-            )
-            Spacer(Modifier.height(d.gapSm))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    name,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = Ink,
-                    maxLines = 2,
-                    textAlign = TextAlign.Center
-                )
-                if (profile?.isVerified == true) {
-                    Spacer(Modifier.width(d.gapXs))
-                    Icon(IqIcons.Verified, "Verified", Modifier.size(d.icon), tint = Crimson)
-                }
-            }
-
-            profile?.bio?.takeIf { it.isNotBlank() }?.let { bio ->
-                Spacer(Modifier.height(d.gapSm))
-                Text(
-                    bio,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = InkMuted,
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            Spacer(Modifier.height(d.gapLg))
-            Counts(profile)
-
-            Spacer(Modifier.height(d.gapLg))
-            Row(horizontalArrangement = Arrangement.spacedBy(d.gapMd)) {
-                Action(IqIcons.Phone, "Audio") { onAudioCall(uid) }
-                Action(IqIcons.Videocam, "Video") { onVideoCall(uid) }
-            }
-
-            when {
-                failed != null && profile == null -> {
-                    Spacer(Modifier.height(d.gapLg))
-                    Text(
-                        // 404 here is not an error to explain away: it is an
-                        // unknown id, a banned account, or somebody who has
-                        // blocked you, and the server deliberately does not say
-                        // which. Neither does this.
-                        "This profile is not available.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = InkFaint
-                    )
-                }
-
-                profile == null -> {
-                    Spacer(Modifier.height(d.gapLg))
-                    ProfileSkeleton()
-                }
-            }
-
-            Spacer(Modifier.height(d.gapXxl))
         }
     }
 }
@@ -267,7 +297,7 @@ private fun Counts(profile: PublicProfile?) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusXl))
-            .background(Color.White)
+            .background(Paper)
             .border(1.dp, Hairline, RoundedCornerShape(d.radiusXl))
             .padding(vertical = d.gapMd),
         verticalAlignment = Alignment.CenterVertically
@@ -319,7 +349,7 @@ private fun Action(icon: androidx.compose.ui.graphics.vector.ImageVector, label:
             Modifier
                 .size(d.iconButtonLg)
                 .clip(CircleShape)
-                .background(Color.White)
+                .background(Paper)
                 .border(1.dp, Hairline, CircleShape),
             contentAlignment = Alignment.Center
         ) {

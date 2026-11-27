@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -89,7 +90,7 @@ fun EmojiPanel(onPick: (String) -> Unit, onBackspace: (() -> Unit)? = null) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .heightIn(min = d.screenHeight * 0.34f, max = d.screenHeight * 0.42f)
     ) {
         HairlineDivider()
