@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.components
 
+import com.iqsocial.iq_message.ui.theme.ThemeMode
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -256,8 +257,10 @@ fun GridSkeleton(rows: Int = 4, columns: Int = 3, modifier: Modifier = Modifier)
  * enough to read as a block on a white card, light enough that nine of them are
  * not a wall.
  */
-val SkeletonGrey = Color(0xFFE3E3E8)
-val SkeletonGlow = Color(0xFFF2F2F5)
+val SkeletonGrey: Color
+    get() = if (ThemeMode.dark) Color(0xFF26272C) else Color(0xFFE3E3E8)
+val SkeletonGlow: Color
+    get() = if (ThemeMode.dark) Color(0xFF34353B) else Color(0xFFF2F2F5)
 
 /**
  * A head of a profile that has not arrived: the picture, the name, a line under it.

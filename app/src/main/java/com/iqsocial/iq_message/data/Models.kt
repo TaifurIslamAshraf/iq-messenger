@@ -85,6 +85,16 @@ enum class DeliveryStatus { SENDING, FAILED, SENT, DELIVERED, SEEN }
 @Immutable
 data class Message(
     val id: String,
+    /**
+     * Who this message is for its whole life, as far as the list is concerned.
+     *
+     * Not [id]. A message this phone sends has no server id until the server
+     * answers, so [id] changes the moment it does - and a list keyed on it saw one
+     * row vanish and a new one arrive, and played the new one's entrance: the
+     * bubble blinked and rose again after it had already been sent. The client id
+     * is there from the first frame and never changes. Blank means "use [id]".
+     */
+    val key: String = "",
     val text: String = "",
     val time: String,
     val fromMe: Boolean,
@@ -125,7 +135,10 @@ data class Message(
      * it belongs to.
      */
     val link: LinkPreview? = null
-)
+) {
+    /** What the thread's list keys this row by - see [key]. */
+    val listKey: String get() = key.ifBlank { id }
+}
 
 enum class CallKind { AUDIO, VIDEO }
 enum class CallDirection { INCOMING, OUTGOING, MISSED }

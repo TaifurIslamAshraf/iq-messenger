@@ -437,7 +437,7 @@ object Outbox {
                 // If this message came from an upload, its placeholder has been
                 // standing in for it until now. Retired here rather than when the
                 // upload finished, so the thread is never showing neither of them.
-                UploadQueue.handedOver(work.clientId)
+                UploadQueue.handedOver(work.clientId, result.data.id)
                 Outcome.Done
             }
 

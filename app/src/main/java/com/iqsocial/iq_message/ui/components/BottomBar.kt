@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.components
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -59,7 +60,7 @@ fun IqBottomBar(
     Column(
         modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
     ) {
         HairlineDivider()
         Row(

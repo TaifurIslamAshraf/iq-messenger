@@ -95,6 +95,19 @@ object MediaCache {
 
     fun peek(messageId: String): ImageBitmap? = cache.get(messageId)
 
+    /**
+     * A picture this phone already has, filed under the message it now belongs to.
+     *
+     * For a photo or video just sent: the bubble was drawing it from the file on
+     * this phone, and the moment the server answers, the bubble becomes the
+     * server's message and asks for it by that id instead. Without this it would
+     * be an empty box until the same picture came back down from the server.
+     */
+    fun seed(messageId: String, picture: ImageBitmap) {
+        if (messageId.isBlank() || cache.get(messageId) != null) return
+        cache.put(messageId, picture)
+    }
+
     /** The blurred stand-in, if this photo has ever been decoded. */
     fun peekTiny(messageId: String): ImageBitmap? = tiny.get(messageId)
 

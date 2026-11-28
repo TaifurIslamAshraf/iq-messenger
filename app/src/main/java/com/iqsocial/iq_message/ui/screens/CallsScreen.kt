@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -141,146 +142,153 @@ fun CallsScreen(
         else calls.filter { it.person.name.contains(needle, ignoreCase = true) }
     }
 
-    PullToRefreshBox(
-        // Only once there is a list to pull: the first load has a spinner of its
-        // own in the middle of the screen, and two at once reads as two things
-        // happening.
-        isRefreshing = loading && calls.isNotEmpty(),
-        onRefresh = { attempt++ },
-        modifier = Modifier.fillMaxSize()
+    // The title bar stays put; only the list under it scrolls.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Paper)
     ) {
-        LazyColumn(
+        Row(
             Modifier
-                .fillMaxSize()
-                .background(Color.White),
-            contentPadding = PaddingValues(bottom = d.gapXl)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-        item {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Calls",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                CircleIconButton(
-                    icon = IqIcons.PersonAdd,
-                    contentDescription = "New call",
-                    onClick = {},
-                    iconSize = d.iconLg
-                )
-                CircleIconButton(
-                    icon = IqIcons.MoreVert,
-                    contentDescription = "More options",
-                    onClick = {}
-                )
-            }
-        }
-
-        item {
-            SearchField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = "Search calls",
-                modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
+            Text(
+                "Calls",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            CircleIconButton(
+                icon = IqIcons.PersonAdd,
+                contentDescription = "New call",
+                onClick = {},
+                iconSize = d.iconLg
+            )
+            CircleIconButton(
+                icon = IqIcons.MoreVert,
+                contentDescription = "More options",
+                onClick = {}
             )
         }
-
-        item {
-            Row(
+        PullToRefreshBox(
+            // Only once there is a list to pull: the first load has a spinner of its
+            // own in the middle of the screen, and two at once reads as two things
+            // happening.
+            isRefreshing = loading && calls.isNotEmpty(),
+            onRefresh = { attempt++ },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            LazyColumn(
                 Modifier
-                    .fillMaxWidth()
-                    .padding(start = d.gutter, end = d.gutter, top = d.gapSm),
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .background(Paper),
+                contentPadding = PaddingValues(bottom = d.gapXl)
             ) {
-                Text(
-                    if (onlyMissed) "Missed" else "Recent",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = InkMuted,
-                    modifier = Modifier.weight(1f)
-                )
-                // The server filters this, so it covers the whole history rather
-                // than the page in hand - which is why it is a request and not a
-                // predicate over `calls`.
-                Text(
-                    if (onlyMissed) "Show all" else "Missed only",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Crimson,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable { onlyMissed = !onlyMissed }
-                        .padding(horizontal = d.gapSm, vertical = d.gapXs)
+
+            item {
+                SearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "Search calls",
+                    modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
                 )
             }
-        }
 
-        when {
-            loading && calls.isEmpty() -> item { ListSkeleton(trailing = true) }
-
-            failure != null -> item {
-                Column(
+            item {
+                Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = d.gutter, vertical = d.gapXxl),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(start = d.gutter, end = d.gutter, top = d.gapSm),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        failure.orEmpty(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Crimson,
-                        textAlign = TextAlign.Center
+                        if (onlyMissed) "Missed" else "Recent",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = InkMuted,
+                        modifier = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.height(d.gapSm))
+                    // The server filters this, so it covers the whole history rather
+                    // than the page in hand - which is why it is a request and not a
+                    // predicate over `calls`.
                     Text(
-                        "Try again",
+                        if (onlyMissed) "Show all" else "Missed only",
                         style = MaterialTheme.typography.titleSmall,
-                        color = Crimson,
                         fontWeight = FontWeight.SemiBold,
+                        color = Crimson,
                         modifier = Modifier
                             .clip(CircleShape)
-                            .clickable { attempt++ }
-                            .padding(horizontal = d.gapMd, vertical = d.gapXs)
+                            .clickable { onlyMissed = !onlyMissed }
+                            .padding(horizontal = d.gapSm, vertical = d.gapXs)
                     )
                 }
             }
 
-            results.isEmpty() -> item { NoCalls(searching = query.isNotBlank()) }
-        }
+            when {
+                loading && calls.isEmpty() -> item { ListSkeleton(trailing = true) }
 
-        items(results, key = { it.id }) { record ->
-            CallRow(
-                record = record,
-                onClick = {
-                    if (record.kind == CallKind.VIDEO) onVideoCall(record.person.id)
-                    else onAudioCall(record.person.id)
+                failure != null -> item {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = d.gutter, vertical = d.gapXxl),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            failure.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Crimson,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(d.gapSm))
+                        Text(
+                            "Try again",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Crimson,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { attempt++ }
+                                .padding(horizontal = d.gapMd, vertical = d.gapXs)
+                        )
+                    }
                 }
-            )
-            HairlineDivider(
-                Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
-            )
-        }
 
-        if (cursor != null && query.isBlank()) {
-            item {
-                // Reaching this row is the request: it is only composed when the
-                // list has been scrolled to the end of what is loaded.
-                LaunchedEffect(cursor) { loadMore() }
-                // Two rows rather than a spinner, for the same reason as the first
-                // page: what is coming is more of these, and showing their shape
-                // keeps the scroll position meaning what it meant a moment ago.
-                ListSkeleton(rows = 2, trailing = true)
+                results.isEmpty() -> item { NoCalls(searching = query.isNotBlank()) }
+            }
+
+            items(results, key = { it.id }) { record ->
+                CallRow(
+                    record = record,
+                    onClick = {
+                        if (record.kind == CallKind.VIDEO) onVideoCall(record.person.id)
+                        else onAudioCall(record.person.id)
+                    }
+                )
+                HairlineDivider(
+                    Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
+                )
+            }
+
+            if (cursor != null && query.isBlank()) {
+                item {
+                    // Reaching this row is the request: it is only composed when the
+                    // list has been scrolled to the end of what is loaded.
+                    LaunchedEffect(cursor) { loadMore() }
+                    // Two rows rather than a spinner, for the same reason as the first
+                    // page: what is coming is more of these, and showing their shape
+                    // keeps the scroll position meaning what it meant a moment ago.
+                    ListSkeleton(rows = 2, trailing = true)
+                }
             }
         }
-    }
+        }
     }
 }
 

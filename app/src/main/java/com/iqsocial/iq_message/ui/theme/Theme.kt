@@ -1,9 +1,11 @@
 package com.iqsocial.iq_message.ui.theme
 
+import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
@@ -14,6 +16,33 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+
+private val IqDarkColorScheme = darkColorScheme(
+    primary = Crimson,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF3B1422),
+    onPrimaryContainer = Color(0xFFFFB3C6),
+    secondary = Sunset,
+    onSecondary = Color.White,
+    tertiary = OnlineGreen,
+    onTertiary = Color.White,
+    background = Color(0xFF0E0E10),
+    onBackground = Color(0xFFF1F1F4),
+    surface = Color(0xFF161619),
+    onSurface = Color(0xFFF1F1F4),
+    surfaceVariant = Color(0xFF24252A),
+    onSurfaceVariant = Color(0xFFA0A2AA),
+    surfaceContainerLowest = Color(0xFF0E0E10),
+    surfaceContainerLow = Color(0xFF161619),
+    surfaceContainer = Color(0xFF1C1D21),
+    surfaceContainerHigh = Color(0xFF222328),
+    surfaceContainerHighest = Color(0xFF2A2B30),
+    outline = Color(0xFF2C2D33),
+    outlineVariant = Color(0xFF2C2D33),
+    error = Crimson,
+    onError = Color.White,
+    scrim = Color(0x99000000)
+)
 
 private val IqColorScheme = lightColorScheme(
     primary = Crimson,
@@ -71,12 +100,15 @@ fun IQMessageTheme(
  */
 @Composable
 fun IQMessageTheme(widthDp: Float, heightDp: Float, content: @Composable () -> Unit) {
+    // Before anything is drawn, so a dark-mode phone never flashes a white frame.
+    val appContext = LocalContext.current.applicationContext
+    remember(appContext) { ThemeMode.init(appContext) }
     val dimens = remember(widthDp, heightDp) { buildIqDimens(widthDp, heightDp) }
     val typography = remember(dimens.fontScale) { iqTypography(dimens.fontScale) }
 
     CompositionLocalProvider(LocalIqDimens provides dimens) {
         MaterialTheme(
-            colorScheme = IqColorScheme,
+            colorScheme = if (ThemeMode.dark) IqDarkColorScheme else IqColorScheme,
             typography = typography,
             content = content
         )
@@ -103,8 +135,11 @@ fun SystemBarIcons(darkIcons: Boolean) {
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = darkIcons
-            isAppearanceLightNavigationBars = darkIcons
+            // Dark icons are asked for over a light page; in dark mode that page
+            // is dark, and the icons have to be light to be seen.
+            val light = darkIcons && !ThemeMode.dark
+            isAppearanceLightStatusBars = light
+            isAppearanceLightNavigationBars = light
         }
     }
 }

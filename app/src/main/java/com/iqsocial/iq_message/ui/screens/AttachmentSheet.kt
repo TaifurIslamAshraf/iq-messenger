@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -82,7 +83,7 @@ fun AttachmentSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color.White,
+        containerColor = Paper,
         dragHandle = {
             Box(
                 Modifier
@@ -211,7 +212,7 @@ fun AttachmentSheet(
                             .align(Alignment.TopEnd)
                             .size(d.scaled(26))
                             .clip(CircleShape)
-                            .background(Color.White)
+                            .background(Paper)
                             .border(1.dp, Hairline, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {

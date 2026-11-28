@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -166,7 +167,7 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
             .background(CanvasGrey)
             .imePadding()
     ) {
-        Column(Modifier.fillMaxWidth().background(Color.White)) {
+        Column(Modifier.fillMaxWidth().background(Paper)) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -317,7 +318,7 @@ fun QrScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(d.radiusMd))
-                        .background(Color.White)
+                        .background(Paper)
                         .border(1.dp, Hairline, RoundedCornerShape(d.radiusMd))
                         .padding(horizontal = d.gapMd, vertical = d.gapMd)
                 ) {
@@ -407,7 +408,7 @@ private fun Pill(
     Row(
         Modifier
             .clip(RoundedCornerShape(d.radiusLg))
-            .background(if (enabled) Color.White else FieldGrey)
+            .background(if (enabled) Paper else FieldGrey)
             .border(1.dp, Hairline, RoundedCornerShape(d.radiusLg))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = d.gapLg, vertical = d.gapSm),

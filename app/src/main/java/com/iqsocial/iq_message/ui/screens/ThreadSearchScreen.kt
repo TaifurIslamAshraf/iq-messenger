@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -145,7 +146,7 @@ fun ThreadSearchScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Paper)
             .statusBarsPadding()
             .imePadding()
     ) {

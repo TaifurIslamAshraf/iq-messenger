@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -125,7 +126,7 @@ fun PeopleSearchScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Paper)
             // A search screen is mostly used with the keyboard up; without this the
             // results below the field would sit under it.
             .imePadding()

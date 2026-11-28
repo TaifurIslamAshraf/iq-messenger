@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -322,7 +323,7 @@ private fun OtpInput(
                         .weight(1f)
                         .aspectRatio(0.78f)
                         .clip(RoundedCornerShape(d.radiusSm))
-                        .background(Color.White)
+                        .background(Paper)
                         .border(
                             width = if (focused) 2.dp else 1.dp,
                             color = if (focused) Crimson else Hairline,

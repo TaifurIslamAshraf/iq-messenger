@@ -385,8 +385,12 @@ object CallEngine {
                         // or the projection being revoked - and not by the button.
                         onStop = {
                             scope.launch {
+                                val was = screenSharing
                                 screenSharing = false
-                                if (room === r) refresh(r)
+                                if (room === r) {
+                                    refresh(r)
+                                    if (was) cameraBackOn(r)
+                                }
                             }
                         }
                     )
@@ -404,6 +408,42 @@ object CallEngine {
         scope.launch {
             runCatching { r.localParticipant.setScreenShareEnabled(false) }
             screenSharing = false
+            refresh(r)
+            cameraBackOn(r)
+        }
+    }
+
+    private var cameraReturn: Job? = null
+
+    /**
+     * The camera on again once the screen has stopped being shared.
+     *
+     * Not just unmuted. While the screen was shared this app was mostly in the
+     * background showing something else, and Android takes the camera away from an
+     * app that is not on screen - so the camera track can come out of a share still
+     * published but sending nothing, a frozen picture on the other phone. It is
+     * taken down and a new one made, the same way the camera is first turned on.
+     *
+     * Once, however many ways the share ends: the button and the system's own
+     * "stop sharing" can both report it, a moment apart.
+     */
+    private fun cameraBackOn(r: Room) {
+        cameraReturn?.cancel()
+        cameraReturn = scope.launch {
+            // Let the projection let go first; the camera and the screen capture
+            // share the same graphics pipeline on some phones.
+            delay(CAMERA_RETURN_MS)
+            if (room !== r) return@launch
+            val me = r.localParticipant
+            val old = me.getTrackPublication(io.livekit.android.room.track.Track.Source.CAMERA)
+                ?.track as? io.livekit.android.room.track.LocalVideoTrack
+            if (old != null) {
+                if (warmCamera === old) warmCamera = null
+                runCatching { me.unpublishTrack(old, true) }
+                cameraOn = false
+                refresh(r)
+            }
+            if (enableCamera(r)) cameraOn = true
             refresh(r)
         }
     }
@@ -513,6 +553,8 @@ object CallEngine {
         events = null
         emptyRoom?.cancel()
         emptyRoom = null
+        cameraReturn?.cancel()
+        cameraReturn = null
         metAnyone = false
         room = null
         connected = false
@@ -563,13 +605,21 @@ object CallEngine {
     }
 
     /**
-     * The look of this camera, hung on whatever track it is publishing.
+     * The look of the camera: a filter of its own for every camera track.
      *
-     * One filter for the life of the process rather than one per call: it holds
-     * shader programs and framebuffers, which belong to the capturer's GL context,
-     * and it builds them again by itself whenever a new context hands it a frame.
+     * It was one filter for the life of the process, which held while there was
+     * only ever one camera track at a time. A screen share ends by replacing the
+     * camera track, and for a moment there are two - and a filter is the track's
+     * processor, so the old track stopping told the shared filter to forget where
+     * its frames go (`setSink(null)`) and to start over (`onCapturerStopped`),
+     * after the new track had already plugged itself in. The new camera's frames
+     * then went nowhere: the self-view froze and so did the picture the other phone
+     * saw. A filter per track is told only about its own track.
+     *
+     * The look itself lives in [CameraLook], which every filter reads, so a new
+     * one looks exactly like the last.
      */
-    private val cameraFilter = CameraFilter()
+    private val cameraFilter: CameraFilter get() = CameraFilter()
 
     /**
      * Turns the camera on, with the filter already inside the track.
@@ -732,4 +782,7 @@ object CallEngine {
      * that nobody sits watching a call that has already ended.
      */
     private const val EMPTY_ROOM_MS = 6_000L
+
+    /** How long after a screen share ends before the camera is opened again. */
+    private const val CAMERA_RETURN_MS = 400L
 }

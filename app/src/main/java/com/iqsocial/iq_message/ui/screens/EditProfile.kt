@@ -1,5 +1,7 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.PaperSoft
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -333,7 +335,7 @@ fun EditProfileScreen(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Color.White)
+                .background(Paper)
                 .padding(horizontal = d.gutterTight, vertical = d.gapMd)
                 .navigationBarsPadding()
         ) {
@@ -562,7 +564,7 @@ fun NotificationsScreen(onBack: () -> Unit) {
 @Composable
 private fun ScreenHeader(title: String, onBack: () -> Unit) {
     val d = IqTheme.dimens
-    Column(Modifier.fillMaxWidth().background(Color.White)) {
+    Column(Modifier.fillMaxWidth().background(Paper)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -595,7 +597,7 @@ private fun Card(content: @Composable () -> Unit) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusXl))
-            .background(Color(0xFFFBFAFA))
+            .background(PaperSoft)
             .border(1.dp, Hairline, RoundedCornerShape(d.radiusXl))
     ) { content() }
 }
@@ -774,7 +776,7 @@ private fun Field(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusMd))
-                .background(if (enabled) Color.White else FieldGrey)
+                .background(if (enabled) Paper else FieldGrey)
                 .border(1.dp, Hairline, RoundedCornerShape(d.radiusMd))
                 .padding(horizontal = d.gapMd, vertical = d.gapSm)
                 .heightIn(min = d.scaled(32))
@@ -824,7 +826,7 @@ private fun TapField(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusMd))
-                .background(Color.White)
+                .background(Paper)
                 .border(1.dp, Hairline, RoundedCornerShape(d.radiusMd))
                 .clickable(onClick = onClick)
                 .padding(horizontal = d.gapMd, vertical = d.gapMd),
@@ -848,7 +850,7 @@ private fun ChoiceChip(text: String, chosen: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .clip(RoundedCornerShape(d.radiusMd))
-            .background(if (chosen) CrimsonTint else Color.White)
+            .background(if (chosen) CrimsonTint else Paper)
             .border(
                 1.dp,
                 if (chosen) Crimson else Hairline,

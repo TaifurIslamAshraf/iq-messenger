@@ -1,5 +1,13 @@
 package com.iqsocial.iq_message.ui.screens
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
+import com.iqsocial.iq_message.ui.theme.ThemeMode
+import com.iqsocial.iq_message.ui.theme.InkButton
+import com.iqsocial.iq_message.ui.theme.PaperSoft
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -167,434 +175,484 @@ fun ProfileScreen(
         )
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(CanvasGrey)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Box {
-            /* -- gradient header with the wave cut-out ---------------------- */
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(headerHeight)
-                    .background(BrandSunset)
-            ) {
-                // The account's own banner, under the wave rather than instead of
-                // it: the wave is what joins the header to the page below, and a
-                // photo with a straight edge across the screen would be a different
-                // screen. Dimmed, because the white title and the two buttons sit
-                // on top of it and a bright picture takes them with it.
-                val cover = profile?.coverPicture.orEmpty()
-                if (cover.isNotBlank()) {
-                    var banner by remember(cover) {
-                        mutableStateOf(RemoteImage.peek(cover, RemoteImage.PREVIEW_PX))
-                    }
-                    LaunchedEffect(cover) {
-                        if (banner == null) {
-                            banner = RemoteImage.load(cover, targetPx = RemoteImage.PREVIEW_PX)
-                        }
-                    }
-                    banner?.let {
-                        Image(
-                            bitmap = it,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.22f))
-                        )
-                    }
-                }
-                Canvas(Modifier.fillMaxSize()) {
-                    drawHeaderWave(Color.White, alpha = 0.16f)
-                    translate(0f, size.height * 0.10f) {
-                        drawHeaderWave(CanvasGrey)
-                    }
-                }
-            }
-
-            Column {
-                Row(
+    val pageScroll = rememberScrollState()
+    // The header is a fixed height, so its size is known rather than measured.
+    val heroPx = with(LocalDensity.current) { headerHeight.roundToPx() }
+    var barPx by remember { mutableIntStateOf(0) }
+    val barFill by remember(heroPx) {
+        derivedStateOf {
+            (pageScroll.value.toFloat() / (heroPx - barPx).coerceAtLeast(1)).coerceIn(0f, 1f)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(CanvasGrey)
+                .verticalScroll(pageScroll)
+        ) {
+            Box {
+                /* -- gradient header with the wave cut-out ---------------------- */
+                Box(
                     Modifier
                         .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(horizontal = d.gapMd, vertical = d.gapSm),
-                    verticalAlignment = Alignment.CenterVertically
+                        .height(headerHeight)
+                        .background(BrandSunset)
                 ) {
-                    CircleIconButton(
-                        icon = IqIcons.ArrowBack,
-                        contentDescription = "Back",
-                        onClick = onBack,
-                        background = Color.White.copy(alpha = 0.22f),
-                        tint = Color.White
+                    // The account's own banner, under the wave rather than instead of
+                    // it: the wave is what joins the header to the page below, and a
+                    // photo with a straight edge across the screen would be a different
+                    // screen. Dimmed, because the white title and the two buttons sit
+                    // on top of it and a bright picture takes them with it.
+                    val cover = profile?.coverPicture.orEmpty()
+                    if (cover.isNotBlank()) {
+                        var banner by remember(cover) {
+                            mutableStateOf(RemoteImage.peek(cover, RemoteImage.PREVIEW_PX))
+                        }
+                        LaunchedEffect(cover) {
+                            if (banner == null) {
+                                banner = RemoteImage.load(cover, targetPx = RemoteImage.PREVIEW_PX)
+                            }
+                        }
+                        banner?.let {
+                            Image(
+                                bitmap = it,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.22f))
+                            )
+                        }
+                    }
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawHeaderWave(Color.White, alpha = 0.16f)
+                        translate(0f, size.height * 0.10f) {
+                            drawHeaderWave(CanvasGrey)
+                        }
+                    }
+                }
+
+                Column {
+                    // Room for the bar, which is drawn over the page - see below.
+                    Spacer(
+                        Modifier
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            .padding(vertical = d.gapSm)
+                            .height(d.iconButton)
                     )
-                    Spacer(Modifier.weight(1f))
+
+                    Spacer(Modifier.height(d.gapLg))
+                    IdentityCard(
+                        profile = profile,
+                        onEdit = onEditProfile,
+                        onPicture = { choose(ProfileImage.PICTURE) }
+                    )
+                }
+            }
+
+            // Why the last write failed, where the write was started from.
+            //
+            // The pictures are changed from this page - the two camera buttons - and
+            // until this line existed a refused upload did exactly nothing visible:
+            // the spinner finished, the picture stayed as it was, and the reason sat
+            // in a field nothing drew.
+            MeRepository.error?.let { why ->
+                Spacer(Modifier.height(d.gapMd))
+                PageWidth {
                     Text(
-                        "Profile",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.White,
-                        maxLines = 1
-                    )
-                    Spacer(Modifier.weight(1f))
-                    CircleIconButton(
-                        icon = IqIcons.Camera,
-                        contentDescription = "Change your cover photo",
-                        onClick = { choose(ProfileImage.COVER) },
-                        background = Color.White.copy(alpha = 0.22f),
-                        tint = Color.White
-                    )
-                    CircleIconButton(
-                        icon = IqIcons.QrCode,
-                        contentDescription = "Your QR code",
-                        onClick = onQrCode,
-                        background = Color.White.copy(alpha = 0.22f),
-                        tint = Color.White
-                    )
-                    CircleIconButton(
-                        icon = IqIcons.MoreVert,
-                        contentDescription = "More options",
-                        onClick = {},
-                        background = Color.White.copy(alpha = 0.22f),
-                        tint = Color.White
+                        why,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Crimson
                     )
                 }
-
-                Spacer(Modifier.height(d.gapLg))
-                IdentityCard(
-                    profile = profile,
-                    onEdit = onEditProfile,
-                    onPicture = { choose(ProfileImage.PICTURE) }
-                )
-            }
-        }
-
-        // Why the last write failed, where the write was started from.
-        //
-        // The pictures are changed from this page - the two camera buttons - and
-        // until this line existed a refused upload did exactly nothing visible:
-        // the spinner finished, the picture stayed as it was, and the reason sat
-        // in a field nothing drew.
-        MeRepository.error?.let { why ->
-            Spacer(Modifier.height(d.gapMd))
-            PageWidth {
-                Text(
-                    why,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Crimson
-                )
-            }
-        }
-
-        Spacer(Modifier.height(d.gapLg))
-
-        /* -- settings ------------------------------------------------------ */
-        PageWidth {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Settings",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Ink,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                CircleIconButton(
-                    icon = IqIcons.Search,
-                    contentDescription = "Search settings",
-                    onClick = {},
-                    size = d.iconButtonLg,
-                    background = Color.White,
-                    borderColor = Hairline
-                )
-            }
-
-            Spacer(Modifier.height(d.gapMd))
-
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(d.radiusXl))
-                    .background(Color(0xFFFBFAFA))
-                    .border(1.dp, Hairline, RoundedCornerShape(d.radiusXl))
-            ) {
-                SettingRow(
-                    icon = IqIcons.PersonOutline,
-                    iconTint = CrimsonTint,
-                    title = "Account",
-                    subtitle = profile?.let {
-                        listOfNotNull(
-                            it.gender.takeIf(String::isNotBlank),
-                            it.location.takeIf(String::isNotBlank)
-                                ?: it.country.takeIf(String::isNotBlank)
-                        ).joinToString(" \u00b7 ").ifBlank { "Name, bio, birthday and more" }
-                    } ?: "Profile & verification",
-                    onClick = onEditProfile
-                ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
-
-                // 'Who can message', hidden for now: the messenger does not enforce
-                // it yet. Who can call has no account-wide setting at all - it is
-                // answered per person, in each chat's three-dot Permissions.
-                if (PRIVACY_ROW_SHOWN) {
-                    SettingDivider()
-                    SettingRow(
-                        icon = IqIcons.ShieldOutline,
-                        iconTint = Color(0xFFE3F5E9),
-                        title = "Privacy",
-                        // Writable now: `/v1/me/privacy` takes both of these, so the row
-                        // opens them rather than only reporting them.
-                        // One line, sharing the row with the "Protected" chip, so the
-                        // common case of both settings matching is collapsed rather than
-                        // spelled out and then truncated.
-                        onClick = onPrivacy,
-                        subtitle = profile?.let {
-                            "Messages: ${readable(it.whoCanMessage)}"
-                        } ?: "Security and visibility"
-                    ) {
-                        Text(
-                            "Protected",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = ProtectedGreen,
-                            maxLines = 1
-                        )
-                        Spacer(Modifier.width(d.gapSm))
-                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
-                    }
-                }
-                SettingDivider()
-                // What a notification is allowed to say, which `/v1/settings` owns.
-                //
-                // This was a switch wired to a `remember` - it moved, and nothing
-                // happened. The setting behind it is not a boolean anyway: it has
-                // three values, and a switch cannot show the middle one.
-                SettingRow(
-                    icon = IqIcons.Bell,
-                    iconTint = CrimsonTint,
-                    title = "Notifications",
-                    subtitle = SettingsRepository.notificationPreview.summary,
-                    onClick = onNotifications
-                ) {
-                    if (SettingsRepository.saving) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(d.icon),
-                            color = Crimson,
-                            strokeWidth = d.scaled(2)
-                        )
-                    } else {
-                        Text(
-                            SettingsRepository.notificationPreview.label,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = InkMuted,
-                            maxLines = 1
-                        )
-                        Spacer(Modifier.width(d.gapSm))
-                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
-                    }
-                }
-
-                SettingDivider()
-                // A switch, and this one is wired to something.
-                //
-                // The setting behind it really is a boolean, unlike the three-valued
-                // one above, and the server applies it the moment it answers: whoever
-                // is watching this account's presence is sent an event. So what the
-                // switch shows is what the people on the other end are seeing.
-                SettingRow(
-                    icon = if (SettingsRepository.showActiveStatus) IqIcons.Eye
-                    else IqIcons.EyeOff,
-                    iconTint = CrimsonTint,
-                    title = "Active status",
-                    subtitle = if (SettingsRepository.showActiveStatus) {
-                        "Others can see when you're online"
-                    } else {
-                        "Your online and last seen are hidden"
-                    }
-                ) {
-                    Switch(
-                        checked = SettingsRepository.showActiveStatus,
-                        // Held still while a write is in flight, so it cannot be
-                        // flipped twice into a race whose loser is whatever the
-                        // second reply happens to be.
-                        enabled = !SettingsRepository.saving,
-                        onCheckedChange = { want ->
-                            scope.launch {
-                                SettingsRepository.setActiveStatus(session.token, want)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Crimson,
-                            checkedBorderColor = Crimson
-                        )
-                    )
-                }
-
-                SettingDivider()
-                // The permission that decides whether a call can take the screen -
-                // and, on Android 15, whether the running call's notification is
-                // allowed to be drawn as a call at all.
-                //
-                // A row rather than only the prompt at sign-in, because that prompt
-                // asks once. Declined, it never asks again, and from then on calls
-                // arrive as a banner a locked phone does not show and the ongoing
-                // notification quietly falls back to the plain template - with
-                // nothing anywhere to say which switch would undo it. A setting
-                // somebody can turn down has to be a setting they can find.
-                if (!context.canTakeOverScreen()) {
-                    SettingRow(
-                        icon = IqIcons.Phone,
-                        iconTint = CrimsonTint,
-                        title = "Full screen calls",
-                        subtitle = "Calls arrive as a banner, not a ringing screen",
-                        onClick = { context.openFullScreenSettings() }
-                    ) {
-                        Text(
-                            "Allow",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Crimson,
-                            maxLines = 1
-                        )
-                        Spacer(Modifier.width(d.gapSm))
-                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
-                    }
-
-                    SettingDivider()
-                }
-
-                // The same thing again, for the phones that keep their own switch
-                // for it. Separate from the row above because they are separate
-                // permissions in separate places: granting Android's does nothing
-                // about Xiaomi's, and somebody who has done the first and still
-                // misses calls needs to be told there is a second.
-                if (context.phoneBlocksLockScreen()) {
-                    SettingRow(
-                        icon = IqIcons.Lock,
-                        iconTint = CrimsonTint,
-                        title = "Lock screen & pop-ups",
-                        subtitle = "This phone keeps its own switch for ringing calls",
-                        onClick = { context.openPhoneCallSettings() }
-                    ) {
-                        Text(
-                            "Allow",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Crimson,
-                            maxLines = 1
-                        )
-                        Spacer(Modifier.width(d.gapSm))
-                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
-                    }
-
-                    SettingDivider()
-                }
-                // Whether other people may screenshot this account.
-                //
-                // The switch is about them, not about this phone: the setting
-                // travels with the account, and the app showing this person's chat,
-                // call or profile is the one that locks its window. This phone does
-                // the same for whoever it is looking at.
-                SettingRow(
-                    icon = if (SettingsRepository.allowScreenshot) IqIcons.Camera
-                    else IqIcons.Lock,
-                    iconTint = CrimsonTint,
-                    title = "Screenshots",
-                    subtitle = if (SettingsRepository.allowScreenshot) {
-                        "Others can screenshot your chats, calls and profile"
-                    } else {
-                        "Others are blocked from screenshotting you"
-                    }
-                ) {
-                    Switch(
-                        checked = SettingsRepository.allowScreenshot,
-                        enabled = !SettingsRepository.saving,
-                        onCheckedChange = { want ->
-                            scope.launch {
-                                SettingsRepository.setAllowScreenshot(session.token, want)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Crimson,
-                            checkedBorderColor = Crimson
-                        )
-                    )
-                }
-
-                SettingDivider()
-                SettingRow(
-                    icon = IqIcons.Bell,
-                    iconTint = CrimsonTint,
-                    title = "Screenshot alerts",
-                    subtitle = if (SettingsRepository.notifyOnScreenshot) {
-                        "You're told when someone screenshots you"
-                    } else {
-                        "Screenshots of you pass without a word"
-                    }
-                ) {
-                    Switch(
-                        checked = SettingsRepository.notifyOnScreenshot,
-                        enabled = !SettingsRepository.saving,
-                        onCheckedChange = { want ->
-                            scope.launch {
-                                SettingsRepository.setNotifyOnScreenshot(session.token, want)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Crimson,
-                            checkedBorderColor = Crimson
-                        )
-                    )
-                }
-
-                SettingDivider()
-                SettingRow(
-                    icon = IqIcons.Storage,
-                    iconTint = CrimsonTint,
-                    title = "Data & Storage",
-                    subtitle = "3.2 GB used"
-                ) {
-                    StorageRing(progress = 0.32f)
-                    Spacer(Modifier.width(d.gapSm))
-                    Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
-                }
-
-                SettingDivider()
-                SettingRow(
-                    icon = IqIcons.HelpCircle,
-                    iconTint = CrimsonTint,
-                    title = "Help & Support",
-                    subtitle = "Get assistance"
-                ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
             }
 
             Spacer(Modifier.height(d.gapLg))
 
+            /* -- settings ------------------------------------------------------ */
+            PageWidth {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Settings",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = Ink,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    CircleIconButton(
+                        icon = IqIcons.Search,
+                        contentDescription = "Search settings",
+                        onClick = {},
+                        size = d.iconButtonLg,
+                        background = Paper,
+                        borderColor = Hairline
+                    )
+                }
+
+                Spacer(Modifier.height(d.gapMd))
+
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusXl))
+                        .background(PaperSoft)
+                        .border(1.dp, Hairline, RoundedCornerShape(d.radiusXl))
+                ) {
+                    SettingRow(
+                        icon = IqIcons.PersonOutline,
+                        iconTint = CrimsonTint,
+                        title = "Account",
+                        subtitle = profile?.let {
+                            listOfNotNull(
+                                it.gender.takeIf(String::isNotBlank),
+                                it.location.takeIf(String::isNotBlank)
+                                    ?: it.country.takeIf(String::isNotBlank)
+                            ).joinToString(" \u00b7 ").ifBlank { "Name, bio, birthday and more" }
+                        } ?: "Profile & verification",
+                        onClick = onEditProfile
+                    ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
+
+                    // 'Who can message', hidden for now: the messenger does not enforce
+                    // it yet. Who can call has no account-wide setting at all - it is
+                    // answered per person, in each chat's three-dot Permissions.
+                    if (PRIVACY_ROW_SHOWN) {
+                        SettingDivider()
+                        SettingRow(
+                            icon = IqIcons.ShieldOutline,
+                            iconTint = Color(0xFFE3F5E9),
+                            title = "Privacy",
+                            // Writable now: `/v1/me/privacy` takes both of these, so the row
+                            // opens them rather than only reporting them.
+                            // One line, sharing the row with the "Protected" chip, so the
+                            // common case of both settings matching is collapsed rather than
+                            // spelled out and then truncated.
+                            onClick = onPrivacy,
+                            subtitle = profile?.let {
+                                "Messages: ${readable(it.whoCanMessage)}"
+                            } ?: "Security and visibility"
+                        ) {
+                            Text(
+                                "Protected",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = ProtectedGreen,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.width(d.gapSm))
+                            Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                        }
+                    }
+                    SettingDivider()
+                    // What a notification is allowed to say, which `/v1/settings` owns.
+                    //
+                    // This was a switch wired to a `remember` - it moved, and nothing
+                    // happened. The setting behind it is not a boolean anyway: it has
+                    // three values, and a switch cannot show the middle one.
+                    SettingRow(
+                        icon = IqIcons.Bell,
+                        iconTint = CrimsonTint,
+                        title = "Notifications",
+                        subtitle = SettingsRepository.notificationPreview.summary,
+                        onClick = onNotifications
+                    ) {
+                        if (SettingsRepository.saving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(d.icon),
+                                color = Crimson,
+                                strokeWidth = d.scaled(2)
+                            )
+                        } else {
+                            Text(
+                                SettingsRepository.notificationPreview.label,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = InkMuted,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.width(d.gapSm))
+                            Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                        }
+                    }
+
+                    SettingDivider()
+                    // A switch, and this one is wired to something.
+                    //
+                    // The setting behind it really is a boolean, unlike the three-valued
+                    // one above, and the server applies it the moment it answers: whoever
+                    // is watching this account's presence is sent an event. So what the
+                    // switch shows is what the people on the other end are seeing.
+                    SettingRow(
+                        icon = if (SettingsRepository.showActiveStatus) IqIcons.Eye
+                        else IqIcons.EyeOff,
+                        iconTint = CrimsonTint,
+                        title = "Active status",
+                        subtitle = if (SettingsRepository.showActiveStatus) {
+                            "Others can see when you're online"
+                        } else {
+                            "Your online and last seen are hidden"
+                        }
+                    ) {
+                        Switch(
+                            checked = SettingsRepository.showActiveStatus,
+                            // Held still while a write is in flight, so it cannot be
+                            // flipped twice into a race whose loser is whatever the
+                            // second reply happens to be.
+                            enabled = !SettingsRepository.saving,
+                            onCheckedChange = { want ->
+                                scope.launch {
+                                    SettingsRepository.setActiveStatus(session.token, want)
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Crimson,
+                                checkedBorderColor = Crimson
+                            )
+                        )
+                    }
+
+                    SettingDivider()
+                    // The permission that decides whether a call can take the screen -
+                    // and, on Android 15, whether the running call's notification is
+                    // allowed to be drawn as a call at all.
+                    //
+                    // A row rather than only the prompt at sign-in, because that prompt
+                    // asks once. Declined, it never asks again, and from then on calls
+                    // arrive as a banner a locked phone does not show and the ongoing
+                    // notification quietly falls back to the plain template - with
+                    // nothing anywhere to say which switch would undo it. A setting
+                    // somebody can turn down has to be a setting they can find.
+                    if (!context.canTakeOverScreen()) {
+                        SettingRow(
+                            icon = IqIcons.Phone,
+                            iconTint = CrimsonTint,
+                            title = "Full screen calls",
+                            subtitle = "Calls arrive as a banner, not a ringing screen",
+                            onClick = { context.openFullScreenSettings() }
+                        ) {
+                            Text(
+                                "Allow",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Crimson,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.width(d.gapSm))
+                            Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                        }
+
+                        SettingDivider()
+                    }
+
+                    // The same thing again, for the phones that keep their own switch
+                    // for it. Separate from the row above because they are separate
+                    // permissions in separate places: granting Android's does nothing
+                    // about Xiaomi's, and somebody who has done the first and still
+                    // misses calls needs to be told there is a second.
+                    if (context.phoneBlocksLockScreen()) {
+                        SettingRow(
+                            icon = IqIcons.Lock,
+                            iconTint = CrimsonTint,
+                            title = "Lock screen & pop-ups",
+                            subtitle = "This phone keeps its own switch for ringing calls",
+                            onClick = { context.openPhoneCallSettings() }
+                        ) {
+                            Text(
+                                "Allow",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Crimson,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.width(d.gapSm))
+                            Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                        }
+
+                        SettingDivider()
+                    }
+                    // Whether other people may screenshot this account.
+                    //
+                    // The switch is about them, not about this phone: the setting
+                    // travels with the account, and the app showing this person's chat,
+                    // call or profile is the one that locks its window. This phone does
+                    // the same for whoever it is looking at.
+                    SettingRow(
+                        icon = if (SettingsRepository.allowScreenshot) IqIcons.Camera
+                        else IqIcons.Lock,
+                        iconTint = CrimsonTint,
+                        title = "Screenshots",
+                        subtitle = if (SettingsRepository.allowScreenshot) {
+                            "Others can screenshot your chats, calls and profile"
+                        } else {
+                            "Others are blocked from screenshotting you"
+                        }
+                    ) {
+                        Switch(
+                            checked = SettingsRepository.allowScreenshot,
+                            enabled = !SettingsRepository.saving,
+                            onCheckedChange = { want ->
+                                scope.launch {
+                                    SettingsRepository.setAllowScreenshot(session.token, want)
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Crimson,
+                                checkedBorderColor = Crimson
+                            )
+                        )
+                    }
+
+                    SettingDivider()
+                    SettingRow(
+                        icon = IqIcons.Bell,
+                        iconTint = CrimsonTint,
+                        title = "Screenshot alerts",
+                        subtitle = if (SettingsRepository.notifyOnScreenshot) {
+                            "You're told when someone screenshots you"
+                        } else {
+                            "Screenshots of you pass without a word"
+                        }
+                    ) {
+                        Switch(
+                            checked = SettingsRepository.notifyOnScreenshot,
+                            enabled = !SettingsRepository.saving,
+                            onCheckedChange = { want ->
+                                scope.launch {
+                                    SettingsRepository.setNotifyOnScreenshot(session.token, want)
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Crimson,
+                                checkedBorderColor = Crimson
+                            )
+                        )
+                    }
+
+                    SettingDivider()
+                    // Kept on this phone - see ThemeMode - and applied at once, with
+                    // no restart: every theme colour is read through it.
+                    val themeContext = LocalContext.current
+                    SettingRow(
+                        icon = IqIcons.Moon,
+                        iconTint = CrimsonTint,
+                        title = "Dark mode",
+                        subtitle = if (ThemeMode.dark) "On" else "Off"
+                    ) {
+                        Switch(
+                            checked = ThemeMode.dark,
+                            onCheckedChange = { want -> ThemeMode.setDark(themeContext, want) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Crimson,
+                                checkedBorderColor = Crimson
+                            )
+                        )
+                    }
+
+                    SettingDivider()
+                    SettingRow(
+                        icon = IqIcons.Storage,
+                        iconTint = CrimsonTint,
+                        title = "Data & Storage",
+                        subtitle = "3.2 GB used"
+                    ) {
+                        StorageRing(progress = 0.32f)
+                        Spacer(Modifier.width(d.gapSm))
+                        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
+                    }
+
+                    SettingDivider()
+                    SettingRow(
+                        icon = IqIcons.HelpCircle,
+                        iconTint = CrimsonTint,
+                        title = "Help & Support",
+                        subtitle = "Get assistance"
+                    ) { Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint) }
+                }
+
+                Spacer(Modifier.height(d.gapLg))
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .clickable(onClick = onLogOut)
+                        .padding(vertical = d.gapMd),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(IqIcons.Logout, null, Modifier.size(d.icon), tint = Crimson)
+                    Spacer(Modifier.width(d.gapSm))
+                    Text(
+                        "Log out",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Normal,
+                        color = Crimson
+                    )
+                }
+
+                Spacer(Modifier.height(d.gapXl))
+            }
+        }
+
+        // The bar - back, the title, the buttons - stays at the top while the
+        // page scrolls under it. Clear over the header, and filled in as the
+        // header goes, so its icons are never left floating on the content.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onSizeChanged { barPx = it.height }
+                .background(Crimson.copy(alpha = barFill))
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(d.radiusMd))
-                    .clickable(onClick = onLogOut)
-                    .padding(vertical = d.gapMd),
-                horizontalArrangement = Arrangement.Center,
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(horizontal = d.gapMd, vertical = d.gapSm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(IqIcons.Logout, null, Modifier.size(d.icon), tint = Crimson)
-                Spacer(Modifier.width(d.gapSm))
+                CircleIconButton(
+                    icon = IqIcons.ArrowBack,
+                    contentDescription = "Back",
+                    onClick = onBack,
+                    background = Color.White.copy(alpha = 0.22f),
+                    tint = Color.White
+                )
+                Spacer(Modifier.weight(1f))
                 Text(
-                    "Log out",
+                    "Profile",
                     style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Normal,
-                    color = Crimson
+                    color = Color.White,
+                    maxLines = 1
+                )
+                Spacer(Modifier.weight(1f))
+                CircleIconButton(
+                    icon = IqIcons.Camera,
+                    contentDescription = "Change your cover photo",
+                    onClick = { choose(ProfileImage.COVER) },
+                    background = Color.White.copy(alpha = 0.22f),
+                    tint = Color.White
+                )
+                CircleIconButton(
+                    icon = IqIcons.QrCode,
+                    contentDescription = "Your QR code",
+                    onClick = onQrCode,
+                    background = Color.White.copy(alpha = 0.22f),
+                    tint = Color.White
+                )
+                CircleIconButton(
+                    icon = IqIcons.MoreVert,
+                    contentDescription = "More options",
+                    onClick = {},
+                    background = Color.White.copy(alpha = 0.22f),
+                    tint = Color.White
                 )
             }
-
-            Spacer(Modifier.height(d.gapXl))
         }
     }
 }
@@ -689,7 +747,7 @@ private fun IdentityCard(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color(0xFFFBFAFA))
+                .background(PaperSoft)
                 .border(1.dp, Hairline, RoundedCornerShape(d.radiusXl))
         ) {
             Box(Modifier.fillMaxWidth()) {
@@ -704,7 +762,7 @@ private fun IdentityCard(
                             person = me,
                             size = d.avatarXl,
                             ringWidth = d.scaled(4),
-                            ringColor = Color.White,
+                            ringColor = Paper,
                             ringGap = 0.dp,
                             // Respects the user's own "show active status" setting.
                             showPresence = profile?.showActiveStatus == true
@@ -790,7 +848,7 @@ private fun IdentityCard(
                         .padding(d.gapMd)
                         .size(editSize)
                         .clip(CircleShape)
-                        .background(Ink)
+                        .background(InkButton)
                         .clickable(onClick = onEdit),
                     contentAlignment = Alignment.Center
                 ) {

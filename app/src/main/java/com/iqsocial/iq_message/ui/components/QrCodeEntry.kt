@@ -45,6 +45,7 @@ import com.iqsocial.iq_message.ui.theme.Ink
 import com.iqsocial.iq_message.ui.theme.InkFaint
 import com.iqsocial.iq_message.ui.theme.InkMuted
 import com.iqsocial.iq_message.ui.theme.IqTheme
+import com.iqsocial.iq_message.ui.theme.Paper
 
 /**
  * Adding someone by their QR code, two ways: the camera, or the code typed in.
@@ -79,7 +80,7 @@ fun QrCodeEntryDialog(
                 .fillMaxWidth()
                 .imePadding()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(d.gutter)
         ) {
             Text(title, style = MaterialTheme.typography.headlineSmall, color = Ink)

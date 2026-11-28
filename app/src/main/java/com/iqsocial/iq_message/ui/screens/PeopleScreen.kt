@@ -1,5 +1,6 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -114,134 +115,140 @@ fun PeopleScreen(onOpenChat: (String) -> Unit, onFindPeople: () -> Unit = {}) {
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = ContactsRepository.syncing || PeopleRepository.loading,
-        onRefresh = { pull++ },
-        modifier = Modifier.fillMaxSize()
+    // The title bar stays put; only the list under it scrolls.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Paper)
     ) {
-        LazyColumn(
+        Row(
             Modifier
-                .fillMaxSize()
-                .background(Color.White),
-            contentPadding = PaddingValues(bottom = d.gapXl)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-        item {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(start = d.gutter, end = d.gapXs, top = d.gapSm),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "People",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                CircleIconButton(
-                    icon = IqIcons.PersonAdd,
-                    contentDescription = "New message",
-                    onClick = onFindPeople,
-                    iconSize = d.iconLg
-                )
-                CircleIconButton(
-                    icon = IqIcons.MoreVert,
-                    contentDescription = "More options",
-                    onClick = {}
-                )
-            }
-        }
-
-        item {
-            SearchField(
-                value = query,
-                onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
-                placeholder = "Search your people",
-                modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
+            Text(
+                "People",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            CircleIconButton(
+                icon = IqIcons.PersonAdd,
+                contentDescription = "New message",
+                onClick = onFindPeople,
+                iconSize = d.iconLg
+            )
+            CircleIconButton(
+                icon = IqIcons.MoreVert,
+                contentDescription = "More options",
+                onClick = {}
             )
         }
+        PullToRefreshBox(
+            isRefreshing = ContactsRepository.syncing || PeopleRepository.loading,
+            onRefresh = { pull++ },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            LazyColumn(
+                Modifier
+                    .fillMaxSize()
+                    .background(Paper),
+                contentPadding = PaddingValues(bottom = d.gapXl)
+            ) {
+                item {
+                    SearchField(
+                        value = query,
+                        onValueChange = { query = it.take(PeopleApi.MAX_QUERY) },
+                        placeholder = "Search your people",
+                        modifier = Modifier.padding(horizontal = d.gutter, vertical = d.gapMd)
+                    )
+                }
 
-        if (deviceContacts.isEmpty() && !results.isSearch) {
-            item {
-                SyncContactsRow(onClick = requestContacts)
-            }
-        }
-
-        if (!results.isSearch) {
-            item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { }
-                        .heightIn(min = 64.dp)
-                        .padding(horizontal = d.gutter, vertical = d.gapMd),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier
-                            .size(d.avatarLg)
-                            .clip(CircleShape)
-                            .background(CrimsonTint),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
+                if (deviceContacts.isEmpty() && !results.isSearch) {
+                    item {
+                        SyncContactsRow(onClick = requestContacts)
                     }
-                    Spacer(Modifier.width(d.gapMd))
-                    Text(
-                        "New group",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Ink
-                    )
                 }
-            }
-        }
 
-        if (rows.isEmpty()) {
-            item {
-                if (results.loading) {
-                    ListSkeleton(rows = 5, lines = 1)
-                } else {
-                    EmptyPeople(
-                        isSearch = results.isSearch,
-                        failed = results.error != null,
-                        onRetry = { pull++ }
-                    )
-                }
-            }
-        }
-
-        grouped.forEach { (letter, people) ->
-            item(key = "header_$letter") {
-                Text(
-                    letter.toString(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = InkMuted,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.White)
-                        .padding(start = d.gutter, top = d.gapMd, bottom = d.gapXs)
-                )
-            }
-            people.forEach { person ->
-                item(key = person.id) {
-                    ContactRow(person) {
-                        val auth = token ?: return@ContactRow
-                        scope.launch {
-                            val r = ConversationsApi.open(auth, person.id)
-                            if (r is ApiResult.Success) onOpenChat(r.data.id)
+                if (!results.isSearch) {
+                    item {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { }
+                                .heightIn(min = 64.dp)
+                                .padding(horizontal = d.gutter, vertical = d.gapMd),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(d.avatarLg)
+                                    .clip(CircleShape)
+                                    .background(CrimsonTint),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(IqIcons.People, null, Modifier.size(d.iconLg), tint = Crimson)
+                            }
+                            Spacer(Modifier.width(d.gapMd))
+                            Text(
+                                "New group",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Ink
+                            )
                         }
                     }
-                    HairlineDivider(
-                        Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
-                    )
+                }
+
+                if (rows.isEmpty()) {
+                    item {
+                        if (results.loading) {
+                            ListSkeleton(rows = 5, lines = 1)
+                        } else {
+                            EmptyPeople(
+                                isSearch = results.isSearch,
+                                failed = results.error != null,
+                                onRetry = { pull++ }
+                            )
+                        }
+                    }
+                }
+
+                grouped.forEach { (letter, people) ->
+                    item(key = "header_$letter") {
+                        Text(
+                            letter.toString(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = InkMuted,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Paper)
+                                .padding(start = d.gutter, top = d.gapMd, bottom = d.gapXs)
+                        )
+                    }
+                    people.forEach { person ->
+                        item(key = person.id) {
+                            ContactRow(person) {
+                                val auth = token ?: return@ContactRow
+                                scope.launch {
+                                    val r = ConversationsApi.open(auth, person.id)
+                                    if (r is ApiResult.Success) onOpenChat(r.data.id)
+                                }
+                            }
+                            HairlineDivider(
+                                Modifier.padding(start = d.avatarLg + d.gutter + d.gapMd, end = d.gutter)
+                            )
+                        }
+                    }
                 }
             }
         }
-    }
     }
 }
 

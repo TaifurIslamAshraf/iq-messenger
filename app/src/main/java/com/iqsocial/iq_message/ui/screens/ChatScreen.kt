@@ -1,5 +1,7 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.InkButton
+import com.iqsocial.iq_message.ui.theme.Paper
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -435,23 +437,45 @@ fun ChatScreen(
     val messages by remember(conversationId) {
         derivedStateOf {
             val sent = sentMessages
-            // The same message, briefly in both lists, must still be one row.
+            val rows = thread
+            val uploads = UploadQueue.forConversation(conversationId)
+            val standing = uploads.associateBy { it.clientId }
+            val used = HashSet<String>()
+            val keys = HashSet<String>(sent.size + uploads.size)
+            val out = ArrayList<Message>(sent.size + uploads.size)
+            // One row per key, whatever the server sends: a key used twice is not
+            // a glitch but a crash in the list's measure pass.
+            fun add(m: Message) {
+                if (keys.add(m.listKey)) {
+                    out += m
+                    return
+                }
+                val byId = m.copy(key = m.id)
+                if (m.id.isNotBlank() && keys.add(byId.listKey)) out += byId
+            }
+            // A picture or a recording on its way stands in for its own message
+            // until the server has answered for it.
             //
-            // An upload hands its message to the outbox and only leaves this list
-            // when the outbox says so, so for a frame or two it is in the thread
-            // *and* still in the queue - and both carry the client id as their id,
-            // because a message the server has not answered for has no other. The
-            // list goes into a `LazyColumn` keyed by that id, and a key used twice
-            // is not a visual glitch:
-            //
-            //     IllegalArgumentException: Key "088f64c2-…" was already used
-            //
-            // thrown from inside the measure pass, which takes the app with it -
-            // every time a picture was sent.
-            val already = sent.mapTo(HashSet(sent.size)) { it.id }
-            sent + UploadQueue.forConversation(conversationId)
-                .map { it.toBubble() }
-                .filterNot { it.id in already }
+            // In between, the thread holds a bare pending row - written when the
+            // upload finished and the message was handed to the outbox - with no
+            // picture, no recording and no text: an empty bubble that showed for
+            // a moment between the upload and the real message. Now the upload's
+            // bubble keeps its place and its picture until the server's copy, with
+            // its media, takes over under the same key.
+            sent.forEachIndexed { i, bubble ->
+                val row = rows.getOrNull(i)
+                val upload = row?.clientId?.takeIf { it.isNotBlank() }?.let { standing[it] }
+                if (upload != null) {
+                    used += upload.clientId
+                    if (row.id.isBlank()) {
+                        add(upload.toBubble())
+                        return@forEachIndexed
+                    }
+                }
+                add(bubble)
+            }
+            uploads.forEach { if (it.clientId !in used) add(it.toBubble()) }
+            out
         }
     }
     // Work out separators once, shared by run grouping and the displayed rows.
@@ -547,7 +571,7 @@ fun ChatScreen(
     var settled by remember(conversationId) { mutableStateOf(false) }
     LaunchedEffect(conversationId, thread.size) {
         if (!settled && thread.isNotEmpty()) {
-            thread.forEach { alreadyHere += it.id }
+            thread.forEach { alreadyHere += it.clientId.ifBlank { it.id } }
             settled = true
         }
     }
@@ -1515,7 +1539,7 @@ fun ChatScreen(
                     ) {
                         items(
                             shown,
-                            key = { it.message.id },
+                            key = { it.message.listKey },
                             // Reuse is by shape, so whether there is a stamp is part of
                             // it. Without that the list hands a slot that was built with
                             // a stamp to a row that has none - the tree changes under the
@@ -1530,7 +1554,7 @@ fun ChatScreen(
                             val message = row.message
                             // New since this screen opened - which is to say sent
                             // just now, or just arrived.
-                            val arriving = settled && message.id !in alreadyHere
+                            val arriving = settled && message.listKey !in alreadyHere
                             // One child, not two. A lazy item is meant to be a single
                             // composable; two siblings loose in it are measured and
                             // placed by the list's own policy, which stacks them along
@@ -1959,6 +1983,7 @@ private fun ChatMessage.toBubble(
     readSeq: Int = 0
 ): Message = Message(
     id = id.ifBlank { clientId },
+    key = clientId.ifBlank { id },
     text = when {
         isDeleted -> "This message was deleted"
         text.isNotBlank() -> text
@@ -2123,7 +2148,7 @@ private fun MessageActions(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(d.radiusXl))
-                .background(Color.White)
+                .background(Paper)
                 .padding(vertical = d.gapMd)
         ) {
             if (!message.isDeleted) ActionRow(IqIcons.ArrowForward, "Forward", onForward)
@@ -2170,7 +2195,7 @@ private fun MessageRequestBar(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gutter, vertical = d.gapMd)
     ) {
         Text(
@@ -2201,7 +2226,7 @@ private fun RejectedRequestBar(busy: Boolean, onAccept: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gutter, vertical = d.gapSm),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2267,7 +2292,7 @@ private fun WaitingForAccept(name: String) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
     ) {
         HairlineDivider()
         Text(
@@ -2326,7 +2351,7 @@ private fun LinkPreviewCard(preview: LinkPreview, onDismiss: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gutter, vertical = d.gapSm),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2491,7 +2516,7 @@ private fun ReplyingTo(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gutter, vertical = d.gapSm),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2630,7 +2655,7 @@ private fun ChatTopBar(
     // Read here rather than passed in: it is a snapshot map, so this recomposes
     // when the answer lands without the screen above having to thread it down.
     val presence = PresenceRepository.of(person.id)
-    Column(Modifier.background(Color.White)) {
+    Column(Modifier.background(Paper)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -2925,7 +2950,7 @@ private fun ReactionChip(
             .background(ChatCanvas)
             .padding(2.dp)
             .clip(CircleShape)
-            .background(Color.White)
+            .background(Paper)
             .padding(horizontal = d.gapXs, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2996,6 +3021,7 @@ private class RowMarks {
  */
 private fun UploadQueue.Outgoing.toBubble(): Message = Message(
     id = clientId,
+    key = clientId,
     text = "",
     // Three states, not two. "Waiting" is the one that was missing: an upload with
     // no network to go over has not failed, and calling it "not sent" told somebody
@@ -3290,8 +3316,8 @@ private fun MessageRow(
     // Positive is right; a message of your own travels the other way.
     val direction = if (message.fromMe) -1f else 1f
 
-    val offset = remember(message.id) { Animatable(0f) }
-    var armed by remember(message.id) { mutableStateOf(false) }
+    val offset = remember(message.listKey) { Animatable(0f) }
+    var armed by remember(message.listKey) { mutableStateOf(false) }
     /**
      * Where the row and the bubble are, held **outside** snapshot state.
      *
@@ -3301,7 +3327,7 @@ private fun MessageRow(
      * the thread stuttered. Nothing here needs to recompose when a position
      * changes: the long press reads it once, and the icon reads it at placement.
      */
-    val marks = remember(message.id) { RowMarks() }
+    val marks = remember(message.listKey) { RowMarks() }
 
     /**
      * The entrance: up a little, and up to full size.
@@ -3316,8 +3342,10 @@ private fun MessageRow(
      * by hand: there is no sequence to control, and a value animated by the system
      * costs nothing once it has settled.
      */
-    var landed by remember(message.id) { mutableStateOf(!arriving) }
-    LaunchedEffect(message.id) { landed = true }
+    // Keyed on what lasts, so the server answering for a message just sent does
+    // not play its entrance a second time.
+    var landed by remember(message.listKey) { mutableStateOf(!arriving) }
+    LaunchedEffect(message.listKey) { landed = true }
     val entrance by animateFloatAsState(
         targetValue = if (landed) 1f else 0f,
         animationSpec = tween(ENTER_MS),
@@ -3595,7 +3623,7 @@ private fun ImageBubble(message: Message, onOpen: () -> Unit = {}) {
             // them is a column of pictures with the conversation squeezed between.
             .fillMaxWidth(0.5f)
             .clip(shape)
-            .background(if (message.fromMe) Crimson else Color.White)
+            .background(if (message.fromMe) Crimson else Paper)
     ) {
         Box(
             Modifier
@@ -3839,7 +3867,7 @@ private fun CallBubble(message: Message, onCallBack: (Boolean) -> Unit) {
                 Modifier
                     .size(d.avatarSm)
                     .clip(CircleShape)
-                    .background(Color.White),
+                    .background(Paper),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -3882,7 +3910,7 @@ private fun CallBubble(message: Message, onCallBack: (Boolean) -> Unit) {
                 .fillMaxWidth()
                 .height(d.buttonHeight)
                 .clip(RoundedCornerShape(d.radiusMd))
-                .background(Color.White)
+                .background(Paper)
                 .clickable { onCallBack(note.video) },
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
@@ -3945,7 +3973,7 @@ private fun CallRequestBubble(
                 Modifier
                     .size(d.avatarSm)
                     .clip(CircleShape)
-                    .background(Color.White),
+                    .background(Paper),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(IqIcons.Phone, null, Modifier.size(d.iconSm), tint = Crimson)
@@ -4139,7 +4167,7 @@ private fun VoiceBubble(message: Message) {
                 Modifier
                     .size(d.scaled(40))
                     .clip(CircleShape)
-                    .background(if (message.fromMe) Color.White else Ink)
+                    .background(if (message.fromMe) Color.White else InkButton)
                     // Nothing to play until it has been sent. While it is coming
                     // down the button stays live, because a tap then means "never
                     // mind" - the one thing a spinner on its own cannot offer.
@@ -4400,7 +4428,7 @@ private fun Composer(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(Paper)
     ) {
         HairlineDivider()
         Row(

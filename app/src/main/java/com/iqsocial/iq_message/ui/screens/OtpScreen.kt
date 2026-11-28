@@ -1,5 +1,7 @@
 package com.iqsocial.iq_message.ui.screens
 
+import com.iqsocial.iq_message.ui.theme.PaperSoft
+import com.iqsocial.iq_message.ui.theme.Paper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -216,7 +218,7 @@ fun OtpScreen(
                         Modifier
                             .fillMaxWidth()
                             .border(1.dp, Hairline, RoundedCornerShape(d.radiusLg))
-                            .background(Color(0xFFFAFAFB), RoundedCornerShape(d.radiusLg))
+                            .background(PaperSoft, RoundedCornerShape(d.radiusLg))
                             .padding(horizontal = d.gapMd, vertical = d.gapLg)
                     ) {
                         Box {
@@ -346,7 +348,7 @@ private fun OtpCell(
             // so six of them still fit comfortably on a 360dp screen.
             .aspectRatio(0.78f)
             .clip(RoundedCornerShape(d.radiusSm))
-            .background(Color.White)
+            .background(Paper)
             .border(
                 width = if (focused) 2.dp else 1.dp,
                 color = if (focused) Crimson else Hairline,
