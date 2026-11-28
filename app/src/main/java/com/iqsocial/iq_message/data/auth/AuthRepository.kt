@@ -4,6 +4,7 @@ import android.content.Context
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.AuthApi
 import com.iqsocial.iq_message.data.remote.AuthUser
+import com.iqsocial.iq_message.data.remote.routeMissing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -35,7 +36,22 @@ class AuthRepository(private val session: SessionStore) {
     suspend fun connectMainApp(context: Context): ApiResult<AuthUser> {
         val token = withContext(Dispatchers.IO) { MainAppAccount.token(context) }
             ?: return ApiResult.Failure("Open IQ Social and sign in there first")
-        val result = AuthApi.connect(token, session.deviceId)
+        var result = AuthApi.connect(token, session.deviceId)
+        if (result.routeMissing) {
+            // A messenger server from before /v1/auth/connect still takes IQ Social's token as it is: the same shape.
+            val account = withContext(Dispatchers.IO) { MainAppAccount.find(context) }
+                ?: return ApiResult.Failure("Open IQ Social and sign in there first")
+            result = ApiResult.Success(
+                AuthUser(
+                    uid = account.uid,
+                    fullname = account.fullname,
+                    phone = "",
+                    profilePicture = account.profilePicture,
+                    refCode = "",
+                    token = token
+                )
+            )
+        }
         if (result is ApiResult.Success) session.save(result.data)
         return result
     }
