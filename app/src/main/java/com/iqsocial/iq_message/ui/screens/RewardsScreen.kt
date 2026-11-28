@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,27 +76,21 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Today's rewards: points, who counts, and how far each has got.
+ * Today's rewards: stars, who counts, and how far each has got.
  *
  * The idea the API encodes: a day gives a handful of **slots**, each one a person
- * you can earn points by talking to, plus one **special** slot whose person you
- * choose. Talk fills a slot; a full slot pays once; everything resets at
- * `resets_at`.
+ * you can earn stars by talking to, plus one **special** slot whose person you
+ * choose. Talk fills a slot; a full slot shows **Collect**, and its stars go in only
+ * when that is tapped; everything resets at `resets_at`, and stars not collected by
+ * then are lost.
  *
- * Three calls back it: `GET /v1/rewards/today` for all of the above, and
- * `PUT`/`DELETE /v1/rewards/special` to pick or clear the chosen person.
+ * Four calls back it: `GET /v1/rewards/today` for all of the above,
+ * `POST /v1/rewards/collect` for the button, and `PUT`/`DELETE /v1/rewards/special`
+ * to pick or clear the chosen person.
  */
 @Composable
 fun RewardsScreen(
-    onOpenChat: (String) -> Unit = {},
-    /**
-     * Starts a call, which is the only thing that fills a slot.
-     *
-     * Talking is what the server counts - `talk counts once a one-to-one call ends`
-     * - so a screen about empty slots that could only open a chat would be pointing
-     * at the wrong door.
-     */
-    onCall: (String) -> Unit = {}
+    onOpenChat: (String) -> Unit = {}
 ) {
     SystemBarIcons(darkIcons = true)
     val d = IqTheme.dimens
@@ -109,8 +103,9 @@ fun RewardsScreen(
     var failure by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
     var picking by remember { mutableStateOf(false) }
-    var calling by remember { mutableStateOf(false) }
     var changing by remember { mutableStateOf(false) }
+    /** Whose slot is being collected right now, so its button can say so. */
+    var collecting by remember { mutableStateOf<String?>(null) }
     var note by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(token, attempt) {
@@ -177,6 +172,23 @@ fun RewardsScreen(
 
     fun reload() {
         attempt++
+    }
+
+    /**
+     * Puts one completed slot's stars into the balance. Nothing goes in until this
+     * runs, which is what leaves room to show an ad first, here, once there is one.
+     */
+    fun collect(uid: String) {
+        val auth = token ?: return
+        if (collecting != null) return
+        collecting = uid
+        note = null
+        scope.launch {
+            val result = RewardsApi.collect(auth, uid)
+            if (result is ApiResult.Failure) note = result.message
+            collecting = null
+            reload()
+        }
     }
 
     /**
@@ -257,6 +269,9 @@ fun RewardsScreen(
                             livePeer = state.live?.peerUid,
                             busy = changing,
                             lockLeftMs = lockLeftMs,
+                            collecting = collecting != null &&
+                                collecting == state.special.person?.uid,
+                            onCollect = { state.special.person?.uid?.let(::collect) },
                             onPick = { picking = true },
                             onClear = {
                                 val auth = token ?: return@SpecialCard
@@ -268,34 +283,32 @@ fun RewardsScreen(
                         )
                     }
 
-                    if (state.slots.isNotEmpty()) {
-                        item {
-                            SectionLabel(
-                                "Today's people",
-                                "${state.slotsUsed} of ${state.slotsTotal} slots used"
-                            )
-                        }
-                        // Only slots with somebody in them - a row draws nothing
-                        // for an empty one anyway - and each person-and-kind once.
-                        // The key is built from those two, and a lazy list given the
-                        // same key twice does not skip the second: it throws. Two
-                        // empty slots of one kind would have been exactly that.
-                        val filled = state.slots
-                            .filter { it.person?.uid?.isNotBlank() == true }
-                            .distinctBy { it.person?.uid + it.kind.wire }
-                        items(filled, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
-                            SlotRow(
-                                slot = slot,
-                                liveMs = liveMs,
-                                livePeer = state.live?.peerUid,
-                                onClick = { slot.person?.uid?.let(onOpenChat) }
-                            )
-                        }
+                    item {
+                        SectionLabel(
+                            "Today's people",
+                            "${state.slotsUsed} of ${state.slotsTotal} slots used"
+                        )
                     }
-
-                    if (state.normalFree > 0) {
-                        item { MoreSlots(state.normalFree) { calling = true } }
+                    // Only slots with somebody in them, and each person-and-kind
+                    // once. The key is built from those two, and a lazy list given
+                    // the same key twice does not skip the second: it throws.
+                    val filled = state.slots
+                        .filter { it.person?.uid?.isNotBlank() == true }
+                        .distinctBy { it.person?.uid + it.kind.wire }
+                    items(filled, key = { it.person?.uid.orEmpty() + it.kind.wire }) { slot ->
+                        val uid = slot.person?.uid.orEmpty()
+                        SlotRow(
+                            slot = slot,
+                            liveMs = liveMs,
+                            livePeer = state.live?.peerUid,
+                            collecting = collecting == uid,
+                            onCollect = { collect(uid) },
+                            onClick = { onOpenChat(uid) }
+                        )
                     }
+                    // The rest fill by themselves with the next calls to someone new,
+                    // so they are only places, with nothing to press.
+                    items(state.normalFree, key = { "free-$it" }) { EmptySlot() }
                 }
 
                 note?.let { why ->
@@ -330,21 +343,6 @@ fun RewardsScreen(
                 }
             }
         }
-    }
-
-    if (calling) {
-        // The same sheet, for the other reason somebody is chosen here. `already`
-        // is left out: anyone can be called, including the special person.
-        SpecialPicker(
-            token = token,
-            already = null,
-            title = "Call someone",
-            onPick = { uid ->
-                calling = false
-                onCall(uid)
-            },
-            onDismiss = { calling = false }
-        )
     }
 
     if (picking) {
@@ -493,9 +491,10 @@ private fun Summary(state: RewardsToday, liveMs: Long) {
         horizontalArrangement = Arrangement.spacedBy(d.gapSm)
     ) {
         Figure(
-            label = "Points",
-            value = state.balance.toString(),
+            label = "Stars",
+            value = state.stars.toString(),
             tint = Crimson,
+            icon = true,
             modifier = Modifier.weight(1f)
         )
         Figure(
@@ -518,7 +517,14 @@ private fun Summary(state: RewardsToday, liveMs: Long) {
 }
 
 @Composable
-private fun Figure(label: String, value: String, tint: Color, modifier: Modifier = Modifier) {
+private fun Figure(
+    label: String,
+    value: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    /** A star before the figure, for the one that counts stars. */
+    icon: Boolean = false
+) {
     val d = IqTheme.dimens
     Column(
         modifier
@@ -526,13 +532,19 @@ private fun Figure(label: String, value: String, tint: Color, modifier: Modifier
             .background(CanvasGrey)
             .padding(d.gapMd)
     ) {
-        Text(
-            value,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = tint,
-            maxLines = 1
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon) {
+                Icon(IqIcons.Star, null, Modifier.size(d.icon), tint = tint)
+                Spacer(Modifier.width(d.gapXs))
+            }
+            Text(
+                value,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = tint,
+                maxLines = 1
+            )
+        }
         Text(label, style = MaterialTheme.typography.bodyMedium, color = InkMuted, maxLines = 1)
     }
 }
@@ -572,6 +584,8 @@ private fun SpecialCard(
     busy: Boolean,
     /** How long the pick still holds; 0 once it can be changed. */
     lockLeftMs: Long,
+    collecting: Boolean,
+    onCollect: () -> Unit,
     onPick: () -> Unit,
     onClear: () -> Unit
 ) {
@@ -595,13 +609,8 @@ private fun SpecialCard(
                 color = Crimson,
                 modifier = Modifier.weight(1f)
             )
-            if (special.points > 0) {
-                Text(
-                    "+${special.points}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Crimson
-                )
+            if (special.stars > 0) {
+                StarAmount(special.stars, if (special.collectedAt > 0L) OnlineGreen else Crimson)
             }
         }
 
@@ -618,7 +627,20 @@ private fun SpecialCard(
                 person = who,
                 slotStatus = special.status,
                 talkMs = special.talkMs + if (livePeer == who.uid) liveMs else 0L,
-                targetMs = special.targetMs
+                targetMs = special.targetMs,
+                collected = special.collectedAt > 0L
+            )
+        }
+
+        if (special.readyToCollect) {
+            Spacer(Modifier.height(d.gapMd))
+            Action(
+                label = if (collecting) "Collecting…" else "Collect ${special.stars} stars",
+                filled = true,
+                enabled = !collecting,
+                onClick = onCollect,
+                modifier = Modifier.fillMaxWidth(),
+                icon = IqIcons.Star
             )
         }
 
@@ -710,30 +732,86 @@ private fun Action(
     filled: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null
 ) {
     val d = IqTheme.dimens
+    val tint = if (!enabled) InkFaint else if (filled) Color.White else Crimson
     Row(
         modifier
             .height(d.buttonHeight)
             .clip(RoundedCornerShape(d.radiusMd))
             .background(if (filled) Crimson else Paper)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = d.gapMd),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (icon != null) {
+            Icon(icon, null, Modifier.size(d.iconSm), tint = tint)
+            Spacer(Modifier.width(d.gapXs))
+        }
         Text(
             label,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            color = if (!enabled) InkFaint else if (filled) Color.White else Crimson,
+            color = tint,
+            maxLines = 1
+        )
+    }
+}
+
+/** A star and how many: what a slot pays, or paid. */
+@Composable
+private fun StarAmount(stars: Int, tint: Color) {
+    val d = IqTheme.dimens
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(IqIcons.Star, null, Modifier.size(d.iconSm), tint = tint)
+        Spacer(Modifier.width(d.gapXs))
+        Text(
+            "+$stars",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = tint,
+            maxLines = 1
+        )
+    }
+}
+
+/** The button on a full slot's row. Small, because it shares the row with a name. */
+@Composable
+private fun CollectButton(stars: Int, busy: Boolean, onClick: () -> Unit) {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .height(d.scaled(34))
+            .clip(CircleShape)
+            .background(if (busy) Hairline else Crimson)
+            .clickable(enabled = !busy, onClick = onClick)
+            .padding(horizontal = d.gapMd),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(IqIcons.Star, null, Modifier.size(d.iconSm), tint = if (busy) InkFaint else Color.White)
+        Spacer(Modifier.width(d.gapXs))
+        Text(
+            if (busy) "Collecting…" else "Collect $stars",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = if (busy) InkFaint else Color.White,
             maxLines = 1
         )
     }
 }
 
 @Composable
-private fun SlotRow(slot: RewardSlot, liveMs: Long, livePeer: String?, onClick: () -> Unit) {
+private fun SlotRow(
+    slot: RewardSlot,
+    liveMs: Long,
+    livePeer: String?,
+    collecting: Boolean,
+    onCollect: () -> Unit,
+    onClick: () -> Unit
+) {
     val d = IqTheme.dimens
     val who = slot.person ?: return
     Column(
@@ -747,13 +825,56 @@ private fun SlotRow(slot: RewardSlot, liveMs: Long, livePeer: String?, onClick: 
             slotStatus = slot.status,
             talkMs = slot.talkMs + if (livePeer == who.uid) liveMs else 0L,
             targetMs = slot.targetMs,
-            points = slot.points
-        )
+            collected = slot.collectedAt > 0L
+        ) {
+            when {
+                slot.readyToCollect -> CollectButton(slot.stars, collecting, onCollect)
+                slot.stars > 0 -> StarAmount(
+                    slot.stars,
+                    if (slot.collectedAt > 0L) OnlineGreen else InkFaint
+                )
+            }
+        }
     }
 }
 
 /**
- * One person, what they are worth, and how far along they are.
+ * A normal slot nobody has yet: the next call with someone new takes it.
+ *
+ * Drawn at a real row's size so the list does not jump when one fills, and with
+ * nothing to press - there is nothing to do but talk to somebody.
+ */
+@Composable
+private fun EmptySlot() {
+    val d = IqTheme.dimens
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = d.gutter, vertical = d.gapSm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(d.avatarMd)
+                .clip(CircleShape)
+                .background(CanvasGrey)
+        )
+        Spacer(Modifier.width(d.gapSm))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Empty slot",
+                style = MaterialTheme.typography.titleMedium,
+                color = InkFaint,
+                maxLines = 1
+            )
+            Spacer(Modifier.height(d.gapXs))
+            Bar(fraction = 0f, done = false)
+        }
+    }
+}
+
+/**
+ * One person, how far along they are, and whatever the row puts at its end.
  *
  * The bar is talk against target. A completed slot shows it full and says so rather
  * than showing a bar at 140%: the target is what pays, and talk beyond it is not
@@ -765,7 +886,8 @@ private fun PersonLine(
     slotStatus: SlotStatus,
     talkMs: Long,
     targetMs: Long,
-    points: Int = 0
+    collected: Boolean = false,
+    trailing: @Composable () -> Unit = {}
 ) {
     val d = IqTheme.dimens
     val done = slotStatus == SlotStatus.COMPLETED
@@ -796,6 +918,7 @@ private fun PersonLine(
             Spacer(Modifier.height(d.gapXs))
             Text(
                 when {
+                    done && collected -> "Collected"
                     done -> "Done"
                     targetMs > 0L -> spanOf(talkMs) + " of " + spanOf(targetMs)
                     else -> spanOf(talkMs)
@@ -807,16 +930,8 @@ private fun PersonLine(
             Spacer(Modifier.height(d.gapXs))
             Bar(fraction = fraction, done = done)
         }
-        if (points > 0) {
-            Spacer(Modifier.width(d.gapSm))
-            Text(
-                "+$points",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = if (done) OnlineGreen else InkFaint,
-                maxLines = 1
-            )
-        }
+        Spacer(Modifier.width(d.gapSm))
+        trailing()
     }
 }
 
@@ -837,51 +952,6 @@ private fun Bar(fraction: Float, done: Boolean) {
                 .clip(CircleShape)
                 .background(if (done) OnlineGreen else Crimson)
         )
-    }
-}
-
-/**
- * The empty slots, and the one thing that fills them.
- *
- * This was a line of text with a plus beside it and nothing behind it - it looked
- * like a button because the API's own note calls it one ("Show \"Add more slots\"
- * while above 0"), and it did nothing when pressed.
- *
- * There is no endpoint that adds a slot, and there is not meant to be: a free slot
- * is filled by talking to somebody new, and that is what this now opens. The label
- * says so too, with the count underneath rather than as the whole sentence.
- */
-@Composable
-private fun MoreSlots(free: Int, onAdd: () -> Unit) {
-    val d = IqTheme.dimens
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = d.gutter, vertical = d.gapMd)
-            .clip(RoundedCornerShape(d.radiusMd))
-            .background(CanvasGrey)
-            .clickable(onClick = onAdd)
-            .padding(d.gapMd),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(IqIcons.Add, null, Modifier.size(d.iconSm), tint = Crimson)
-        Spacer(Modifier.width(d.gapSm))
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Add more slots",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = Ink,
-                maxLines = 1
-            )
-            Text(
-                if (free == 1) "One left to fill today" else "$free left to fill today",
-                style = MaterialTheme.typography.bodyMedium,
-                color = InkMuted,
-                maxLines = 1
-            )
-        }
-        Icon(IqIcons.ChevronRight, null, Modifier.size(d.icon), tint = InkFaint)
     }
 }
 

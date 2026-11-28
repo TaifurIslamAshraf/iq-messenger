@@ -1280,10 +1280,7 @@ private fun HomeShell(
                     onFindPeople = onNewMessage
                 )
 
-                HomeTab.Rewards -> RewardsScreen(
-                    onOpenChat = onOpenChat,
-                    onCall = onAudioCall
-                )
+                HomeTab.Rewards -> RewardsScreen(onOpenChat = onOpenChat)
 
                 HomeTab.Settings -> ProfileScreen(
                     onBack = { onTabChange(HomeTab.Chats) },

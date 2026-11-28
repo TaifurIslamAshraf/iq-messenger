@@ -50,6 +50,9 @@ enum class AppliesFrom(val wire: String) {
  * [RewardsToday.live] instead, and it is the app's job to add the two together while
  * it is running. The server says as much, and it is why a slot can read
  * `in_progress` with `talk_ms` of zero.
+ *
+ * A completed slot pays nothing until it is collected: [readyToCollect] is when the
+ * Collect button shows. What is not collected by the reset is lost.
  */
 @Immutable
 data class RewardSlot(
@@ -59,9 +62,14 @@ data class RewardSlot(
     val status: SlotStatus,
     val talkMs: Long,
     val targetMs: Long,
-    val points: Int,
-    val completedAt: Long
+    /** What it pays once completed and collected. The API still calls these `points`. */
+    val stars: Int,
+    val completedAt: Long,
+    /** Server time it was collected; 0 until then. */
+    val collectedAt: Long = 0L
 ) {
+    val readyToCollect: Boolean get() = status == SlotStatus.COMPLETED && collectedAt == 0L
+
     companion object {
         fun from(json: JSONObject): RewardSlot = RewardSlot(
             kind = SlotKind.from(json.string("kind")),
@@ -69,8 +77,9 @@ data class RewardSlot(
             status = SlotStatus.from(json.string("status")),
             talkMs = json.optLong("talk_ms"),
             targetMs = json.optLong("target_ms"),
-            points = json.optInt("points"),
-            completedAt = json.optLong("completed_at")
+            stars = json.optInt("points"),
+            completedAt = json.optLong("completed_at"),
+            collectedAt = json.optLong("collected_at")
         )
     }
 }
@@ -93,22 +102,28 @@ data class SpecialSlot(
     val status: SlotStatus,
     val talkMs: Long,
     val targetMs: Long,
-    val points: Int,
+    val stars: Int,
     val completedAt: Long,
     val canChangeToday: Boolean,
     /** Server time until which the pick can be neither changed nor cleared; 0 when it can. */
-    val lockedUntil: Long = 0L
+    val lockedUntil: Long = 0L,
+    /** Server time its stars were collected; 0 until then. */
+    val collectedAt: Long = 0L
 ) {
+    val readyToCollect: Boolean
+        get() = person != null && status == SlotStatus.COMPLETED && collectedAt == 0L
+
     companion object {
         fun from(json: JSONObject): SpecialSlot = SpecialSlot(
             person = json.optJSONObject("person")?.let(ChatPerson::from),
             status = SlotStatus.from(json.string("status")),
             talkMs = json.optLong("talk_ms"),
             targetMs = json.optLong("target_ms"),
-            points = json.optInt("points"),
+            stars = json.optInt("points"),
             completedAt = json.optLong("completed_at"),
             canChangeToday = json.optBoolean("can_change_today", true),
-            lockedUntil = json.optLong("locked_until")
+            lockedUntil = json.optLong("locked_until"),
+            collectedAt = json.optLong("collected_at")
         )
     }
 }
@@ -142,12 +157,13 @@ data class RewardsToday(
     val serverNow: Long,
     val dayStartsAt: Long,
     val resetsAt: Long,
-    val balance: Int,
+    /** Stars collected so far: the API's `points.balance`. */
+    val stars: Int,
     val usedMs: Long,
     val live: LiveTalk?,
     val slotsUsed: Int,
     val slotsTotal: Int,
-    /** Above zero means there is room to earn another slot today. */
+    /** Normal slots nobody has yet: the next calls with someone new fill them. */
     val normalFree: Int,
     val slots: List<RewardSlot>,
     val special: SpecialSlot
@@ -160,7 +176,7 @@ data class RewardsToday(
                 serverNow = json.optLong("server_now"),
                 dayStartsAt = json.optLong("day_starts_at"),
                 resetsAt = json.optLong("resets_at"),
-                balance = json.optJSONObject("points")?.optInt("balance") ?: 0,
+                stars = json.optJSONObject("points")?.optInt("balance") ?: 0,
                 usedMs = json.optJSONObject("talk")?.optLong("used_ms") ?: 0L,
                 live = json.optJSONObject("live")?.let(LiveTalk::from),
                 slotsUsed = slots.optInt("used"),
@@ -191,14 +207,27 @@ data class SpecialChange(
 /**
  * `/v1/rewards`.
  *
- * Three calls and one idea: talking to people fills slots, and full slots pay
- * points. Everything is per-day and resets at `resets_at`.
+ * One idea: talking to people fills slots, and a full slot pays stars once they are
+ * collected. Everything is per-day and resets at `resets_at`.
  */
 object RewardsApi {
 
     suspend fun today(token: String): ApiResult<RewardsToday> =
         ApiClient.get("/v1/rewards/today", token, MessengerConfig.BASE_URL)
             .mapTo(RewardsToday::from)
+
+    /**
+     * Adds today's completed slot with [uid] - a normal one or the special one - to
+     * the balance, and answers with the stars it added. 409 when it is not complete
+     * yet or was already collected; 404 once the day has reset.
+     */
+    suspend fun collect(token: String, uid: String): ApiResult<Int> =
+        ApiClient.post(
+            path = "/v1/rewards/collect",
+            body = JSONObject().put("uid", uid),
+            token = token,
+            baseUrl = MessengerConfig.BASE_URL
+        ).mapTo { it.optInt("points") }
 
     /**
      * Picks the special person.
