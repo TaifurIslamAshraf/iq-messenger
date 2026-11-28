@@ -3,10 +3,7 @@ package com.iqsocial.iq_message.data.remote
 import org.json.JSONObject
 
 /**
- * The signed-in user, as the backend returns it.
- *
- * `User.toJSON` renames `_id` to `uid` and strips the password, so these are the
- * fields the app can rely on.
+ * The signed-in user, as `/v1/auth` answers it. The token is the main backend's own shape, so it works there too.
  */
 data class AuthUser(
     val uid: String,
@@ -29,75 +26,61 @@ data class AuthUser(
 }
 
 /**
- * The user-facing auth endpoints on the live host, verified against it directly.
- *
- * Paths are the deployed ones — `/login` and `/signup` under `/v1/api` — which do
- * not match the local `iq-backend-web` router (`/api/auth/login`, `/api/auth/register`).
- * The deployed build is ahead of the checked-out repo; the request bodies are the
- * same, so `auth.controller.js` still describes the contract.
+ * Signing in, on the messenger server's own `/v1/auth` - the same accounts as the IQ Social app, so one password
+ * works in both. Password reset is the exception and still goes to the main backend (below).
  */
 object AuthApi {
 
-    /**
-     * Every call here goes to the **account** API, not the messenger host that the
-     * rest of the app now defaults to.
-     *
-     * This is not a leftover. The messenger server exposes five routes — `/v1/me`,
-     * two contacts routes and two health probes — and nothing else; login, signup
-     * and the OTP routes all 404 there. Its own spec says its bearer token is the
-     * one issued by this backend's `/v1/api/login`, so the two are complementary
-     * by design. If auth ever lands on the messenger host, this helper is the only
-     * thing that has to change.
-     */
+    /** The account API, for password reset only. */
     private suspend fun accountPost(path: String, body: JSONObject) =
         ApiClient.post(path, body, baseUrl = ApiConfig.BASE_URL)
 
     /**
-     * Availability check that gates the signup form.
-     *
-     * The live build answers a taken number with `status:"error"`, but the source in
-     * `user.controller.js` uses `successMsg(null, "This phone number has been taken")`
-     * — success carrying a rejection. Both are treated as taken so a redeploy of that
-     * code path cannot let someone through to a signup that will fail.
-     *
-     * Side effect: on success the server stores a signup OTP. This app does not use
-     * it — sign-up needs no code — so it is simply left unread.
+     * Whether a number can sign up on this device, before the signup form. 409 for a number or a device already in
+     * use, 403 for a banned device, each with the server's own wording.
      */
-    suspend fun checkPhone(phone: String, deviceId: String): ApiResult<Unit> {
-        val result = accountPost(
-            "/check_phone",
+    suspend fun checkPhone(phone: String, deviceId: String): ApiResult<Unit> =
+        ApiClient.post(
+            "/v1/auth/check-phone",
             JSONObject().put("phone", phone).put("device_id", deviceId)
-        )
-        if (result is ApiResult.Success && result.message?.contains("taken", true) == true) {
-            return ApiResult.Failure(result.message)
-        }
-        return result.map { }
-    }
+        ).map { }
 
-    suspend fun login(phone: String, password: String): ApiResult<AuthUser> =
-        accountPost(
-            "/login",
+    suspend fun login(phone: String, password: String, deviceId: String): ApiResult<AuthUser> =
+        ApiClient.post(
+            "/v1/auth/login",
             JSONObject()
                 .put("phone", phone)
                 .put("password", password)
+                .put("device_id", deviceId)
         ).map(AuthUser::from)
 
-    /** No OTP step — the server creates the account and returns a token directly. */
+    /** No OTP step - the server creates the account, with the name, and answers its session. */
     suspend fun register(
         fullname: String,
         phone: String,
         password: String,
-        country: String = "",
-        deviceId: String = ""
+        country: String,
+        deviceId: String
     ): ApiResult<AuthUser> =
-        accountPost(
-            "/signup",
+        ApiClient.post(
+            "/v1/auth/signup",
             JSONObject()
                 .put("fullname", fullname)
                 .put("phone", phone)
                 .put("password", password)
                 .put("country", country)
                 .put("device_id", deviceId)
+        ).map(AuthUser::from)
+
+    /**
+     * Trades the IQ Social app's token, handed over on this phone ([com.iqsocial.iq_message.data.auth.MainAppAccount]),
+     * for this app's own session.
+     */
+    suspend fun connect(mainAppToken: String, deviceId: String): ApiResult<AuthUser> =
+        ApiClient.post(
+            "/v1/auth/connect",
+            JSONObject().put("device_id", deviceId),
+            token = mainAppToken
         ).map(AuthUser::from)
 
     /* -- password reset ------------------------------------------------------ */

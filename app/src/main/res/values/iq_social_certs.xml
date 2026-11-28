@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        IQ Social app signing keys MainAppAccount trusts, as SHA-256 fingerprints ("DD:E6:..." or plain hex). Needed
+        only when IQ Social is signed with a different key from this app: then add its Play app-signing key's SHA-256
+        from Play Console → IQ Social → Setup → App signing. Empty means "same key only".
+    -->
+    <string-array name="iq_social_certs" translatable="false" />
+</resources>

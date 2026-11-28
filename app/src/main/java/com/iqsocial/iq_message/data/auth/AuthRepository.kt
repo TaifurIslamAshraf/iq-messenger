@@ -1,8 +1,11 @@
 package com.iqsocial.iq_message.data.auth
 
+import android.content.Context
 import com.iqsocial.iq_message.data.remote.ApiResult
 import com.iqsocial.iq_message.data.remote.AuthApi
 import com.iqsocial.iq_message.data.remote.AuthUser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Auth actions the UI calls, with the session persisted on success.
@@ -20,15 +23,24 @@ class AuthRepository(private val session: SessionStore) {
         validatePhone(phone)?.let { return ApiResult.Failure(it) }
         if (password.isBlank()) return ApiResult.Failure("Password can't be empty")
 
-        val result = AuthApi.login(phone.trim(), password)
+        val result = AuthApi.login(phone.trim(), password, session.deviceId)
         if (result is ApiResult.Success) session.save(result.data)
         return result
     }
 
     /**
-     * [countryCode] must be non-empty — the deployed `/signup` rejects a blank one
-     * with "Country can't be empty", unlike the local repo where it is optional.
+     * Signs in as whoever is signed in to the IQ Social app on this phone. Its token is used once, here, and
+     * replaced by this app's own.
      */
+    suspend fun connectMainApp(context: Context): ApiResult<AuthUser> {
+        val token = withContext(Dispatchers.IO) { MainAppAccount.token(context) }
+            ?: return ApiResult.Failure("Open IQ Social and sign in there first")
+        val result = AuthApi.connect(token, session.deviceId)
+        if (result is ApiResult.Success) session.save(result.data)
+        return result
+    }
+
+    /** [countryCode] is the ISO code ("BD"); the server needs it to read a number typed without its code. */
     suspend fun register(
         fullname: String,
         phone: String,
@@ -42,7 +54,6 @@ class AuthRepository(private val session: SessionStore) {
         if (password != confirmPassword) return ApiResult.Failure("Passwords don't match")
         if (countryCode.isBlank()) return ApiResult.Failure("Please pick your country")
 
-        // No OTP step: the backend registers straight away and returns a token.
         val result = AuthApi.register(
             fullname = fullname.trim(),
             phone = phone.trim(),

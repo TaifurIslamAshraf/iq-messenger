@@ -36,13 +36,12 @@ private enum class SignupStep { Phone, Details }
  * Signing up in two steps: the number is checked against the server before the
  * rest of the form appears.
  *
- * The check is what makes this worth splitting. `/check_phone` knows two things
- * the app can't — whether the number is already registered, and whether this
- * device is tied to another account — and either one makes the whole form a
+ * The check is what makes this worth splitting. `/v1/auth/check-phone` knows two
+ * things the app can't — whether the number is already registered, and whether
+ * this device is tied to another account — and either one makes the whole form a
  * waste of typing. Asking first turns that into one tap.
  *
- * Still no OTP here: the check leaves a code on the server but signup never asks
- * for it, so step two goes straight to creating the account.
+ * No OTP: step two goes straight to creating the account.
  */
 @Composable
 fun SignupScreen(

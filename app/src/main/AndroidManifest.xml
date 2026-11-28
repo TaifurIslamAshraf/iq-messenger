@@ -86,6 +86,12 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- The IQ Social app, whose signed-in account the login screen offers to continue as (MainAppAccount). -->
+    <queries>
+        <package android:name="com.iqama.newsocial" />
+        <provider android:authorities="com.iqama.newsocial.messengerconnect" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
